@@ -14,6 +14,8 @@ import {
   Panel,
   BackgroundVariant,
   ConnectionLineType,
+  Handle,
+  Position,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { RefreshCw, Download } from 'lucide-react';
@@ -38,8 +40,88 @@ const TableNodeComponent = memo(function TableNodeComponent({ data }: { data: Ta
   const fkColumns = data.columns.filter(col => col.isForeignKey);
   const regularColumns = data.columns.filter(col => !col.isPrimaryKey && !col.isForeignKey);
 
+  // Calculate handle positions for each column type
+  let handleIndex = 0;
+  const getHandleOffset = () => {
+    const offset = 44 + handleIndex * 26; // Start after header + column row height
+    handleIndex++;
+    return offset;
+  };
+
+  // Reset for PK handles
+  handleIndex = 0;
+  const pkHandleOffsets = pkColumns.map(() => getHandleOffset());
+
+  // Continue for FK handles (after PK section + border)
+  if (pkColumns.length > 0) handleIndex = pkColumns.length;
+  const fkHandleOffsets = fkColumns.map(() => getHandleOffset());
+
   return (
-    <Card className={`min-w-[220px] shadow-lg border-2 transition-colors ${data.isHighlighted ? 'border-primary ring-2 ring-primary/20' : 'border-border'}`}>
+    <Card className={`min-w-[240px] shadow-lg border-2 transition-colors relative ${data.isHighlighted ? 'border-primary ring-2 ring-primary/20' : 'border-border'}`}>
+      {/* Default target handle (fallback - left side center) */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="default-target"
+        style={{
+          top: '50%',
+          background: '#94a3b8',
+          width: 8,
+          height: 8,
+          border: '2px solid #64748b',
+          opacity: pkColumns.length > 0 ? 0 : 1,
+        }}
+      />
+
+      {/* Default source handle (fallback - right side center) */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="default-source"
+        style={{
+          top: '50%',
+          background: '#94a3b8',
+          width: 8,
+          height: 8,
+          border: '2px solid #64748b',
+          opacity: fkColumns.length > 0 ? 0 : 1,
+        }}
+      />
+
+      {/* Target handles for Primary Keys (left side - where relationships come IN) */}
+      {pkColumns.map((col, idx) => (
+        <Handle
+          key={`target-${col.name}`}
+          type="target"
+          position={Position.Left}
+          id={`${col.name}-target`}
+          style={{
+            top: pkHandleOffsets[idx],
+            background: '#f59e0b',
+            width: 10,
+            height: 10,
+            border: '2px solid #d97706',
+          }}
+        />
+      ))}
+
+      {/* Source handles for Foreign Keys (right side - where relationships go OUT) */}
+      {fkColumns.map((col, idx) => (
+        <Handle
+          key={`source-${col.name}`}
+          type="source"
+          position={Position.Right}
+          id={`${col.name}-source`}
+          style={{
+            top: fkHandleOffsets[idx],
+            background: '#3b82f6',
+            width: 10,
+            height: 10,
+            border: '2px solid #2563eb',
+          }}
+        />
+      ))}
+
       <CardHeader className="py-2 px-3 bg-primary text-primary-foreground rounded-t-lg">
         <CardTitle className="text-sm font-semibold flex items-center justify-between">
           <span className="truncate">{data.label}</span>
@@ -58,9 +140,9 @@ const TableNodeComponent = memo(function TableNodeComponent({ data }: { data: Ta
               {pkColumns.map((col) => (
                 <div
                   key={col.name}
-                  className="px-3 py-1.5 text-xs flex items-center justify-between gap-2 bg-amber-50 dark:bg-amber-950/30"
+                  className="px-3 py-1.5 text-xs flex items-center justify-between gap-2 bg-amber-50 dark:bg-amber-950/30 relative"
                 >
-                  <span className="flex items-center gap-1.5 font-medium">
+                  <span className="flex items-center gap-1.5 font-medium pl-2">
                     <span className="text-amber-600 dark:text-amber-400 text-[10px] font-bold">PK</span>
                     {col.name}
                   </span>
@@ -76,9 +158,9 @@ const TableNodeComponent = memo(function TableNodeComponent({ data }: { data: Ta
               {fkColumns.map((col) => (
                 <div
                   key={col.name}
-                  className="px-3 py-1.5 text-xs flex items-center justify-between gap-2 bg-blue-50 dark:bg-blue-950/30"
+                  className="px-3 py-1.5 text-xs flex items-center justify-between gap-2 bg-blue-50 dark:bg-blue-950/30 relative"
                 >
-                  <span className="flex items-center gap-1.5">
+                  <span className="flex items-center gap-1.5 pl-2">
                     <span className="text-blue-600 dark:text-blue-400 text-[10px] font-bold">FK</span>
                     {col.name}
                     {col.foreignKeyRef && (
@@ -87,7 +169,7 @@ const TableNodeComponent = memo(function TableNodeComponent({ data }: { data: Ta
                       </span>
                     )}
                   </span>
-                  <span className="text-muted-foreground text-[10px]">{col.type}</span>
+                  <span className="text-muted-foreground text-[10px] pr-2">{col.type}</span>
                 </div>
               ))}
             </div>
@@ -100,7 +182,7 @@ const TableNodeComponent = memo(function TableNodeComponent({ data }: { data: Ta
                 key={col.name}
                 className="px-3 py-1 text-xs flex items-center justify-between gap-2"
               >
-                <span className="truncate">
+                <span className="truncate pl-2">
                   {col.name}
                   {!col.nullable && <span className="text-red-500 ml-0.5">*</span>}
                 </span>
@@ -269,37 +351,48 @@ export function SchemaViewer() {
       return;
     }
 
-    const newEdges: Edge[] = relationships.map((rel, index) => {
+    const newEdges: Edge[] = relationships.map((rel) => {
       const edgeId = `edge-${rel.sourceTable}-${rel.sourceColumn}-${rel.targetTable}-${rel.targetColumn}`;
       const isSelected = selectedEdge === edgeId;
+
+      // Get relationship type label
+      const relTypeLabel = rel.type === 'one-to-one' ? '1:1' : rel.type === 'many-to-many' ? 'N:N' : '1:N';
 
       return {
         id: edgeId,
         source: rel.sourceTable,
         target: rel.targetTable,
+        sourceHandle: `${rel.sourceColumn}-source`, // Connect from FK column
+        targetHandle: `${rel.targetColumn}-target`, // Connect to PK column
         type: 'smoothstep',
         animated: isSelected,
-        label: `${rel.sourceColumn} → ${rel.targetColumn}`,
-        labelBgPadding: [8, 4] as [number, number],
+        label: `${relTypeLabel}`,
+        labelBgPadding: [6, 3] as [number, number],
         labelBgBorderRadius: 4,
         labelBgStyle: {
-          fill: 'var(--label-bg, rgba(255, 255, 255, 0.95))',
-          stroke: 'var(--label-border, #e2e8f0)',
+          fill: isSelected ? '#6366f1' : 'var(--label-bg, rgba(255, 255, 255, 0.95))',
+          stroke: isSelected ? '#4f46e5' : 'var(--label-border, #e2e8f0)',
           strokeWidth: 1,
         },
         labelStyle: {
-          fontSize: 10,
-          fontWeight: 500,
-          fill: 'var(--label-text, #64748b)',
+          fontSize: 11,
+          fontWeight: 600,
+          fill: isSelected ? '#ffffff' : 'var(--label-text, #64748b)',
         },
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          color: isSelected ? '#6366f1' : '#64748b',
-          width: 20,
-          height: 20,
+          color: isSelected ? '#6366f1' : '#3b82f6',
+          width: 16,
+          height: 16,
+        },
+        markerStart: {
+          type: MarkerType.Arrow,
+          color: isSelected ? '#6366f1' : '#f59e0b',
+          width: 12,
+          height: 12,
         },
         style: {
-          stroke: isSelected ? '#6366f1' : '#64748b',
+          stroke: isSelected ? '#6366f1' : '#94a3b8',
           strokeWidth: isSelected ? 3 : 2,
         },
       };
@@ -460,25 +553,33 @@ export function SchemaViewer() {
             <>
               <Separator className="my-2" />
               <div className="text-xs font-medium mb-1">Relationships</div>
-              <ScrollArea className="max-h-[120px]">
+              <ScrollArea className="max-h-[150px]">
                 <div className="space-y-1">
                   {relationships.map((rel) => {
                     const edgeId = `edge-${rel.sourceTable}-${rel.sourceColumn}-${rel.targetTable}-${rel.targetColumn}`;
+                    const relTypeLabel = rel.type === 'one-to-one' ? '1:1' : rel.type === 'many-to-many' ? 'N:N' : '1:N';
                     return (
                       <div
                         key={edgeId}
                         className={`text-[10px] p-1.5 rounded cursor-pointer transition-colors ${
                           selectedEdge === edgeId
-                            ? 'bg-primary/10 text-primary'
+                            ? 'bg-primary/10 text-primary border border-primary/30'
                             : 'hover:bg-muted'
                         }`}
                         onClick={() => setSelectedEdge(selectedEdge === edgeId ? null : edgeId)}
                       >
-                        <span className="font-medium">{rel.sourceTable}</span>
-                        <span className="text-muted-foreground">.{rel.sourceColumn}</span>
-                        <span className="mx-1">→</span>
-                        <span className="font-medium">{rel.targetTable}</span>
-                        <span className="text-muted-foreground">.{rel.targetColumn}</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="px-1 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-[8px] font-bold shrink-0">
+                            {relTypeLabel}
+                          </span>
+                          <div className="flex items-center gap-0.5 flex-wrap">
+                            <span className="font-medium">{rel.sourceTable}</span>
+                            <span className="text-blue-600 dark:text-blue-400">.{rel.sourceColumn}</span>
+                            <span className="mx-0.5 text-muted-foreground">→</span>
+                            <span className="font-medium">{rel.targetTable}</span>
+                            <span className="text-amber-600 dark:text-amber-400">.{rel.targetColumn}</span>
+                          </div>
+                        </div>
                       </div>
                     );
                   })}
@@ -489,19 +590,39 @@ export function SchemaViewer() {
         </Panel>
 
         {/* Legend */}
-        <Panel position="top-left" className="bg-background/95 backdrop-blur p-2 rounded-lg border shadow-sm text-xs">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1">
-              <div className="w-5 h-3 bg-amber-100 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-700 rounded text-[8px] flex items-center justify-center font-bold text-amber-700 dark:text-amber-400">PK</div>
-              <span className="text-muted-foreground">Primary Key</span>
+        <Panel position="top-left" className="bg-background/95 backdrop-blur p-3 rounded-lg border shadow-sm text-xs">
+          <div className="text-xs font-medium mb-2">Legend</div>
+          <div className="flex flex-col gap-2">
+            {/* Column Types */}
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1">
+                <div className="w-2.5 h-2.5 rounded-full bg-amber-500 border-2 border-amber-600"></div>
+                <span className="text-muted-foreground">PK (Primary Key)</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-2.5 h-2.5 rounded-full bg-blue-500 border-2 border-blue-600"></div>
+                <span className="text-muted-foreground">FK (Foreign Key)</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-red-500">*</span>
+                <span className="text-muted-foreground">Required</span>
+              </div>
             </div>
-            <div className="flex items-center gap-1">
-              <div className="w-5 h-3 bg-blue-100 dark:bg-blue-950/50 border border-blue-300 dark:border-blue-700 rounded text-[8px] flex items-center justify-center font-bold text-blue-700 dark:text-blue-400">FK</div>
-              <span className="text-muted-foreground">Foreign Key</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <span className="text-red-500">*</span>
-              <span className="text-muted-foreground">Required</span>
+            {/* Relationship Types */}
+            <Separator className="my-1" />
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5">
+                <div className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border text-[9px] font-semibold text-slate-600 dark:text-slate-400">1:N</div>
+                <span className="text-muted-foreground">One-to-Many</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border text-[9px] font-semibold text-slate-600 dark:text-slate-400">1:1</div>
+                <span className="text-muted-foreground">One-to-One</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border text-[9px] font-semibold text-slate-600 dark:text-slate-400">N:N</div>
+                <span className="text-muted-foreground">Many-to-Many</span>
+              </div>
             </div>
           </div>
         </Panel>

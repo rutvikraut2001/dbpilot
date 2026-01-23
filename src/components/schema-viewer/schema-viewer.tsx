@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo, memo } from 'react';
+import { useEffect, useState, useCallback, useMemo, memo, useRef } from 'react';
 import {
   ReactFlow,
   Node,
@@ -133,69 +133,71 @@ const TableNodeComponent = memo(function TableNodeComponent({ data }: { data: Ta
         </CardTitle>
       </CardHeader>
       <CardContent className="p-0">
-        <ScrollArea className="max-h-[250px]">
-          {/* Primary Keys */}
-          {pkColumns.length > 0 && (
-            <div className="border-b border-dashed">
-              {pkColumns.map((col) => (
-                <div
-                  key={col.name}
-                  className="px-3 py-1.5 text-xs flex items-center justify-between gap-2 bg-amber-50 dark:bg-amber-950/30 relative"
-                >
-                  <span className="flex items-center gap-1.5 font-medium pl-2">
-                    <span className="text-amber-600 dark:text-amber-400 text-[10px] font-bold">PK</span>
-                    {col.name}
-                  </span>
-                  <span className="text-muted-foreground text-[10px]">{col.type}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Foreign Keys */}
-          {fkColumns.length > 0 && (
-            <div className="border-b border-dashed">
-              {fkColumns.map((col) => (
-                <div
-                  key={col.name}
-                  className="px-3 py-1.5 text-xs flex items-center justify-between gap-2 bg-blue-50 dark:bg-blue-950/30 relative"
-                >
-                  <span className="flex items-center gap-1.5 pl-2">
-                    <span className="text-blue-600 dark:text-blue-400 text-[10px] font-bold">FK</span>
-                    {col.name}
-                    {col.foreignKeyRef && (
-                      <span className="text-[9px] text-muted-foreground">
-                        → {col.foreignKeyRef.table}
-                      </span>
-                    )}
-                  </span>
-                  <span className="text-muted-foreground text-[10px] pr-2">{col.type}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Regular Columns */}
-          <div>
-            {regularColumns.slice(0, 10).map((col) => (
-              <div
-                key={col.name}
-                className="px-3 py-1 text-xs flex items-center justify-between gap-2"
-              >
-                <span className="truncate pl-2">
-                  {col.name}
-                  {!col.nullable && <span className="text-red-500 ml-0.5">*</span>}
-                </span>
-                <span className="text-muted-foreground text-[10px] shrink-0">{col.type}</span>
-              </div>
-            ))}
-            {regularColumns.length > 10 && (
-              <div className="px-3 py-1.5 text-xs text-muted-foreground text-center bg-muted/50">
-                +{regularColumns.length - 10} more columns
+        {/* Show loading state or empty message when no columns */}
+        {data.columns.length === 0 ? (
+          <div className="px-3 py-2 text-xs text-muted-foreground text-center">
+            Loading columns...
+          </div>
+        ) : (
+          <>
+            {/* Primary Keys */}
+            {pkColumns.length > 0 && (
+              <div className="border-b border-dashed">
+                {pkColumns.map((col) => (
+                  <div
+                    key={col.name}
+                    className="px-3 py-1.5 text-xs flex items-center justify-between gap-2 bg-amber-50 dark:bg-amber-950/30 relative"
+                  >
+                    <span className="flex items-center gap-1.5 font-medium pl-2">
+                      <span className="text-amber-600 dark:text-amber-400 text-[10px] font-bold">PK</span>
+                      {col.name}
+                    </span>
+                    <span className="text-muted-foreground text-[10px]">{col.type}</span>
+                  </div>
+                ))}
               </div>
             )}
-          </div>
-        </ScrollArea>
+
+            {/* Foreign Keys */}
+            {fkColumns.length > 0 && (
+              <div className="border-b border-dashed">
+                {fkColumns.map((col) => (
+                  <div
+                    key={col.name}
+                    className="px-3 py-1.5 text-xs flex items-center justify-between gap-2 bg-blue-50 dark:bg-blue-950/30 relative"
+                  >
+                    <span className="flex items-center gap-1.5 pl-2">
+                      <span className="text-blue-600 dark:text-blue-400 text-[10px] font-bold">FK</span>
+                      {col.name}
+                      {col.foreignKeyRef && (
+                        <span className="text-[9px] text-muted-foreground">
+                          → {col.foreignKeyRef.table}
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-muted-foreground text-[10px] pr-2">{col.type}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Regular Columns - Show ALL columns */}
+            <div>
+              {regularColumns.map((col) => (
+                <div
+                  key={col.name}
+                  className="px-3 py-1 text-xs flex items-center justify-between gap-2"
+                >
+                  <span className="truncate pl-2">
+                    {col.name}
+                    {!col.nullable && <span className="text-red-500 ml-0.5">*</span>}
+                  </span>
+                  <span className="text-muted-foreground text-[10px] shrink-0">{col.type}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </CardContent>
     </Card>
   );
@@ -240,9 +242,26 @@ export function SchemaViewer() {
     }
   }, [activeConnection]);
 
+  // Use ref to track which schemas are being fetched to prevent duplicate requests
+  const fetchingRef = useRef<Set<string>>(new Set());
+  const tableSchemasRef = useRef<Map<string, ColumnInfo[]>>(new Map());
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    tableSchemasRef.current = tableSchemas;
+  }, [tableSchemas]);
+
   const fetchTableSchema = useCallback(
     async (tableName: string) => {
-      if (!activeConnection || tableSchemas.has(tableName)) return;
+      if (!activeConnection) return;
+
+      // Check if already fetched or currently fetching
+      if (tableSchemasRef.current.has(tableName) || fetchingRef.current.has(tableName)) {
+        return;
+      }
+
+      // Mark as fetching
+      fetchingRef.current.add(tableName);
 
       try {
         const response = await fetch(
@@ -255,9 +274,11 @@ export function SchemaViewer() {
         }
       } catch (error) {
         console.error(`Failed to fetch schema for ${tableName}:`, error);
+      } finally {
+        fetchingRef.current.delete(tableName);
       }
     },
-    [activeConnection, tableSchemas]
+    [activeConnection]
   );
 
   useEffect(() => {

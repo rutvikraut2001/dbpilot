@@ -16,14 +16,17 @@ import {
   ConnectionLineType,
   Handle,
   Position,
+  useReactFlow,
+  ReactFlowProvider,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { RefreshCw, Download } from 'lucide-react';
+import { RefreshCw, Download, Search, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
+import { Input } from '@/components/ui/input';
 import { useStudioStore } from '@/lib/stores/studio';
 import { useActiveConnection } from '@/lib/stores/connection';
 import { Relationship, ColumnInfo } from '@/lib/adapters/types';
@@ -210,9 +213,19 @@ const nodeTypes = {
 
 type SchemaNode = Node<TableNodeData, 'tableNode'>;
 
+// Wrapper component to provide ReactFlow context
 export function SchemaViewer() {
+  return (
+    <ReactFlowProvider>
+      <SchemaViewerInner />
+    </ReactFlowProvider>
+  );
+}
+
+function SchemaViewerInner() {
   const activeConnection = useActiveConnection();
   const { tables } = useStudioStore();
+  const { fitView, setCenter } = useReactFlow();
 
   const [nodes, setNodes, onNodesChange] = useNodesState<SchemaNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -220,6 +233,47 @@ export function SchemaViewer() {
   const [relationships, setRelationships] = useState<Relationship[]>([]);
   const [tableSchemas, setTableSchemas] = useState<Map<string, ColumnInfo[]>>(new Map());
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
+
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [highlightedTable, setHighlightedTable] = useState<string | null>(null);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Filter tables based on search query
+  const filteredTables = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const query = searchQuery.toLowerCase();
+    return tables.filter(t => t.name.toLowerCase().includes(query)).slice(0, 8);
+  }, [tables, searchQuery]);
+
+  // Handle table selection from search
+  const handleSelectTable = useCallback((tableName: string) => {
+    setSearchQuery('');
+    setShowSuggestions(false);
+    setHighlightedTable(tableName);
+
+    // Find the node and zoom to it
+    const node = nodes.find(n => n.id === tableName);
+    if (node) {
+      // Center view on the selected node
+      setTimeout(() => {
+        setCenter(node.position.x + 120, node.position.y + 100, { zoom: 1, duration: 500 });
+      }, 100);
+
+      // Clear highlight after 3 seconds
+      setTimeout(() => {
+        setHighlightedTable(null);
+      }, 3000);
+    }
+  }, [nodes, setCenter]);
+
+  // Clear search
+  const handleClearSearch = useCallback(() => {
+    setSearchQuery('');
+    setShowSuggestions(false);
+    setHighlightedTable(null);
+  }, []);
 
   const fetchRelationships = useCallback(async () => {
     if (!activeConnection) return;
@@ -331,7 +385,7 @@ export function SchemaViewer() {
           label: table.name,
           columns: tableSchemas.get(table.name) || [],
           rowCount: table.rowCount,
-          isHighlighted: false,
+          isHighlighted: highlightedTable === table.name,
         },
       });
     });
@@ -357,13 +411,13 @@ export function SchemaViewer() {
           label: table.name,
           columns: tableSchemas.get(table.name) || [],
           rowCount: table.rowCount,
-          isHighlighted: false,
+          isHighlighted: highlightedTable === table.name,
         },
       });
     });
 
     setNodes(newNodes);
-  }, [tables, relationships, tableSchemas, setNodes]);
+  }, [tables, relationships, tableSchemas, highlightedTable, setNodes]);
 
   // Build edges separately (also react to selectedEdge changes)
   useEffect(() => {
@@ -530,8 +584,70 @@ export function SchemaViewer() {
           zoomable
         />
 
-        {/* Top Right - Actions */}
-        <Panel position="top-right" className="flex gap-2">
+        {/* Top Right - Search and Actions */}
+        <Panel position="top-right" className="flex gap-2 items-start">
+          {/* Search Box */}
+          <div className="relative">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                ref={searchInputRef}
+                placeholder="Search tables..."
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setShowSuggestions(true);
+                }}
+                onFocus={() => setShowSuggestions(true)}
+                onBlur={() => {
+                  // Delay to allow clicking on suggestions
+                  setTimeout(() => setShowSuggestions(false), 200);
+                }}
+                className="pl-8 pr-8 h-9 w-[200px] bg-background text-sm"
+              />
+              {searchQuery && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6"
+                  onClick={handleClearSearch}
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              )}
+            </div>
+
+            {/* Suggestions Dropdown */}
+            {showSuggestions && filteredTables.length > 0 && (
+              <div className="absolute top-full left-0 right-0 mt-1 bg-background border rounded-md shadow-lg z-50 max-h-[300px] overflow-auto">
+                {filteredTables.map((table) => (
+                  <button
+                    key={table.name}
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted flex items-center gap-2 transition-colors"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      handleSelectTable(table.name);
+                    }}
+                  >
+                    <span className="font-medium">{table.name}</span>
+                    {table.rowCount !== undefined && (
+                      <Badge variant="secondary" className="text-[10px] ml-auto">
+                        {table.rowCount.toLocaleString()} rows
+                      </Badge>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* No results message */}
+            {showSuggestions && searchQuery && filteredTables.length === 0 && (
+              <div className="absolute top-full left-0 right-0 mt-1 bg-background border rounded-md shadow-lg z-50 p-3 text-sm text-muted-foreground text-center">
+                No tables found
+              </div>
+            )}
+          </div>
+
           <Button
             variant="outline"
             size="sm"

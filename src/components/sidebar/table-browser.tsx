@@ -92,9 +92,9 @@ export function TableBrowser() {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="p-3 border-b">
+      <div className="p-3 border-b shrink-0">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <Database className="h-4 w-4 text-muted-foreground" />
@@ -138,7 +138,7 @@ export function TableBrowser() {
       </div>
 
       {/* Table List */}
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1 overflow-auto">
         <div className="p-2">
           {isLoadingTables ? (
             <div className="flex items-center justify-center py-8 text-muted-foreground">
@@ -206,7 +206,7 @@ export function TableBrowser() {
       </ScrollArea>
 
       {/* Footer */}
-      <div className="p-2 border-t text-xs text-muted-foreground text-center">
+      <div className="p-2 border-t text-xs text-muted-foreground text-center shrink-0">
         {filteredTables.length} table{filteredTables.length !== 1 ? 's' : ''}
       </div>
     </div>

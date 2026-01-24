@@ -175,8 +175,8 @@ export default function StudioPage() {
         {/* Sidebar */}
         <div
           className={cn(
-            'border-r transition-all duration-200 overflow-hidden',
-            sidebarOpen ? 'w-72' : 'w-0'
+            'border-r transition-all duration-200 flex flex-col',
+            sidebarOpen ? 'w-72' : 'w-0 overflow-hidden'
           )}
         >
           {sidebarOpen && <TableBrowser />}

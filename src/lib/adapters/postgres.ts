@@ -1,4 +1,4 @@
-import { Pool, PoolClient } from 'pg';
+import { Pool, PoolClient } from "pg";
 import {
   BaseAdapter,
   TableInfo,
@@ -9,7 +9,7 @@ import {
   QueryResult,
   TableStats,
   IndexInfo,
-} from './types';
+} from "./types";
 
 export class PostgresAdapter extends BaseAdapter {
   private pool: Pool | null = null;
@@ -51,7 +51,7 @@ export class PostgresAdapter extends BaseAdapter {
       });
 
       client = await testPool.connect();
-      const result = await client.query('SELECT version()');
+      const result = await client.query("SELECT version()");
       client.release();
       await testPool.end();
 
@@ -62,14 +62,14 @@ export class PostgresAdapter extends BaseAdapter {
     } catch (error) {
       return {
         success: false,
-        message: error instanceof Error ? error.message : 'Connection failed',
+        message: error instanceof Error ? error.message : "Connection failed",
       };
     }
   }
 
   private getPool(): Pool {
     if (!this.pool) {
-      throw new Error('Database not connected. Call connect() first.');
+      throw new Error("Database not connected. Call connect() first.");
     }
     return this.pool;
   }
@@ -94,7 +94,7 @@ export class PostgresAdapter extends BaseAdapter {
     return result.rows.map((row) => ({
       name: row.name,
       schema: row.schema,
-      type: row.type === 'VIEW' ? 'view' : 'table',
+      type: row.type === "VIEW" ? "view" : "table",
       rowCount: parseInt(row.row_count) || 0,
       sizeBytes: parseInt(row.size_bytes) || 0,
     }));
@@ -104,9 +104,9 @@ export class PostgresAdapter extends BaseAdapter {
     const pool = this.getPool();
 
     // Parse schema.table format
-    const [schema, table] = tableName.includes('.')
-      ? tableName.split('.')
-      : ['public', tableName];
+    const [schema, table] = tableName.includes(".")
+      ? tableName.split(".")
+      : ["public", tableName];
 
     const query = `
       SELECT
@@ -156,10 +156,12 @@ export class PostgresAdapter extends BaseAdapter {
       isPrimaryKey: row.is_primary_key,
       isForeignKey: row.is_foreign_key,
       defaultValue: row.default_value || undefined,
-      foreignKeyRef: row.foreign_table ? {
-        table: row.foreign_table,
-        column: row.foreign_column,
-      } : undefined,
+      foreignKeyRef: row.foreign_table
+        ? {
+            table: row.foreign_table,
+            column: row.foreign_column,
+          }
+        : undefined,
     }));
   }
 
@@ -188,11 +190,14 @@ export class PostgresAdapter extends BaseAdapter {
       sourceColumn: row.source_column,
       targetTable: row.target_table,
       targetColumn: row.target_column,
-      type: 'one-to-many' as const, // Default assumption
+      type: "one-to-many" as const, // Default assumption
     }));
   }
 
-  async getRows(table: string, options: QueryOptions): Promise<PaginatedResult> {
+  async getRows(
+    table: string,
+    options: QueryOptions,
+  ): Promise<PaginatedResult> {
     const pool = this.getPool();
     const { page, pageSize, sortBy, sortOrder, filters } = options;
 
@@ -201,19 +206,19 @@ export class PostgresAdapter extends BaseAdapter {
     let paramIndex = 1;
 
     // Build WHERE clause from filters
-    let whereClause = '';
+    let whereClause = "";
     if (filters && Object.keys(filters).length > 0) {
       const conditions = Object.entries(filters).map(([key, value]) => {
         params.push(value);
         return `"${key}" = $${paramIndex++}`;
       });
-      whereClause = `WHERE ${conditions.join(' AND ')}`;
+      whereClause = `WHERE ${conditions.join(" AND ")}`;
     }
 
     // Build ORDER BY clause
     const orderClause = sortBy
-      ? `ORDER BY "${sortBy}" ${sortOrder === 'desc' ? 'DESC' : 'ASC'}`
-      : '';
+      ? `ORDER BY "${sortBy}" ${sortOrder === "desc" ? "DESC" : "ASC"}`
+      : "";
 
     // Get total count
     const countQuery = `SELECT COUNT(*) as total FROM ${table} ${whereClause}`;
@@ -239,7 +244,10 @@ export class PostgresAdapter extends BaseAdapter {
     };
   }
 
-  async insertRow(table: string, data: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async insertRow(
+    table: string,
+    data: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
     const pool = this.getPool();
 
     const columns = Object.keys(data);
@@ -247,8 +255,8 @@ export class PostgresAdapter extends BaseAdapter {
     const placeholders = columns.map((_, i) => `$${i + 1}`);
 
     const query = `
-      INSERT INTO ${table} (${columns.map(c => `"${c}"`).join(', ')})
-      VALUES (${placeholders.join(', ')})
+      INSERT INTO ${table} (${columns.map((c) => `"${c}"`).join(", ")})
+      VALUES (${placeholders.join(", ")})
       RETURNING *
     `;
 
@@ -259,7 +267,7 @@ export class PostgresAdapter extends BaseAdapter {
   async updateRow(
     table: string,
     primaryKey: Record<string, unknown>,
-    data: Record<string, unknown>
+    data: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     const pool = this.getPool();
 
@@ -268,11 +276,11 @@ export class PostgresAdapter extends BaseAdapter {
 
     const setClause = setColumns
       .map((col, i) => `"${col}" = $${i + 1}`)
-      .join(', ');
+      .join(", ");
 
     const whereClause = Object.keys(primaryKey)
       .map((col, i) => `"${col}" = $${setColumns.length + i + 1}`)
-      .join(' AND ');
+      .join(" AND ");
 
     const query = `
       UPDATE ${table}
@@ -281,16 +289,29 @@ export class PostgresAdapter extends BaseAdapter {
       RETURNING *
     `;
 
+    console.log("Executing UPDATE query:", query);
+    console.log("With values:", values);
+
     const result = await pool.query(query, values);
+
+    if (result.rowCount === 0) {
+      throw new Error(
+        `No rows updated. The row may not exist or primary key values may be incorrect.`,
+      );
+    }
+
     return result.rows[0];
   }
 
-  async deleteRow(table: string, primaryKey: Record<string, unknown>): Promise<boolean> {
+  async deleteRow(
+    table: string,
+    primaryKey: Record<string, unknown>,
+  ): Promise<boolean> {
     const pool = this.getPool();
 
     const whereClause = Object.keys(primaryKey)
       .map((col, i) => `"${col}" = $${i + 1}`)
-      .join(' AND ');
+      .join(" AND ");
 
     const query = `DELETE FROM ${table} WHERE ${whereClause}`;
     const result = await pool.query(query, Object.values(primaryKey));
@@ -308,7 +329,7 @@ export class PostgresAdapter extends BaseAdapter {
 
       return {
         rows: result.rows,
-        columns: result.fields?.map(f => f.name) || [],
+        columns: result.fields?.map((f) => f.name) || [],
         rowCount: result.rowCount ?? result.rows.length,
         executionTimeMs,
       };
@@ -318,7 +339,8 @@ export class PostgresAdapter extends BaseAdapter {
         columns: [],
         rowCount: 0,
         executionTimeMs: Date.now() - startTime,
-        error: error instanceof Error ? error.message : 'Query execution failed',
+        error:
+          error instanceof Error ? error.message : "Query execution failed",
       };
     }
   }
@@ -327,9 +349,9 @@ export class PostgresAdapter extends BaseAdapter {
     const pool = this.getPool();
 
     // Parse schema.table format
-    const [schema, tableName] = table.includes('.')
-      ? table.split('.')
-      : ['public', table];
+    const [schema, tableName] = table.includes(".")
+      ? table.split(".")
+      : ["public", table];
 
     try {
       const query = `
@@ -350,7 +372,7 @@ export class PostgresAdapter extends BaseAdapter {
         indexCount: parseInt(row.index_count) || 0,
       };
     } catch (error) {
-      console.error('Error getting table stats:', error);
+      console.error("Error getting table stats:", error);
       return {
         rowCount: 0,
         sizeBytes: 0,
@@ -363,9 +385,9 @@ export class PostgresAdapter extends BaseAdapter {
     const pool = this.getPool();
 
     // Parse schema.table format
-    const [schema, tableName] = table.includes('.')
-      ? table.split('.')
-      : ['public', table];
+    const [schema, tableName] = table.includes(".")
+      ? table.split(".")
+      : ["public", table];
 
     const query = `
       SELECT
@@ -404,7 +426,11 @@ export class PostgresAdapter extends BaseAdapter {
     return Array.from(indexMap.values());
   }
 
-  async getDatabaseStats(): Promise<{ totalSize: number; tableCount: number; version: string }> {
+  async getDatabaseStats(): Promise<{
+    totalSize: number;
+    tableCount: number;
+    version: string;
+  }> {
     const pool = this.getPool();
 
     const sizeQuery = `SELECT pg_database_size(current_database()) as size`;

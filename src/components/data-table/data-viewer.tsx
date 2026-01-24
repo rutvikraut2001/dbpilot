@@ -72,6 +72,7 @@ export function DataViewer() {
   const [editedData, setEditedData] = useState<RowData>({});
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [rowToDelete, setRowToDelete] = useState<RowData | null>(null);
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
 
   const totalPages = Math.ceil(totalRows / pageSize);
 
@@ -137,7 +138,12 @@ export function DataViewer() {
     return pk;
   };
 
-  const handleSaveRow = async () => {
+  const handleSaveRowClick = () => {
+    if (editingRow === null) return;
+    setUpdateDialogOpen(true);
+  };
+
+  const handleConfirmUpdate = async () => {
     if (editingRow === null || !activeConnection || !selectedTable) return;
 
     try {
@@ -159,6 +165,7 @@ export function DataViewer() {
       const result = await response.json();
 
       if (result.success) {
+        setUpdateDialogOpen(false);
         setEditingRow(null);
         setEditedData({});
         fetchData();
@@ -300,7 +307,7 @@ export function DataViewer() {
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7"
-                onClick={handleSaveRow}
+                onClick={handleSaveRowClick}
               >
                 <Save className="h-3.5 w-3.5" />
               </Button>
@@ -539,6 +546,35 @@ export function DataViewer() {
             </Button>
             <Button variant="destructive" onClick={handleDeleteRow}>
               Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Update Confirmation Dialog */}
+      <Dialog open={updateDialogOpen} onOpenChange={(open) => {
+        setUpdateDialogOpen(open);
+        if (!open) {
+          // Don't cancel editing when closing dialog
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm Update</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to update this row? This will modify the data
+              in your database.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setUpdateDialogOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleConfirmUpdate}>
+              Update
             </Button>
           </DialogFooter>
         </DialogContent>

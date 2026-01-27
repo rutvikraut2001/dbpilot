@@ -1,11 +1,12 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
   flexRender,
   ColumnDef,
+  ColumnResizeMode,
 } from '@tanstack/react-table';
 import {
   ChevronLeft,
@@ -21,14 +22,6 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import {
   Select,
   SelectContent,
@@ -51,6 +44,62 @@ import { cn } from '@/lib/utils';
 
 type RowData = Record<string, unknown>;
 
+// Separate component for editable cell - manages its own state completely
+function EditableCell({
+  initialValue,
+  columnKey,
+  editedDataRef,
+}: {
+  initialValue: unknown;
+  columnKey: string;
+  editedDataRef: React.RefObject<RowData | null>;
+}) {
+  const [value, setValue] = useState(String(initialValue ?? ''));
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      inputRef.current?.focus();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, []);
+
+  return (
+    <Input
+      ref={inputRef}
+      value={value}
+      onChange={(e) => {
+        setValue(e.target.value);
+        if (editedDataRef.current) {
+          editedDataRef.current[columnKey] = e.target.value;
+        }
+      }}
+      onKeyDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      className="h-7 text-xs border-primary/50 focus-visible:ring-primary/30"
+    />
+  );
+}
+
+// Display cell for non-editing mode
+function DisplayCell({ value }: { value: unknown }) {
+  if (value === null || value === undefined) {
+    return <span className="text-muted-foreground/60 italic text-xs">NULL</span>;
+  }
+
+  if (typeof value === 'object') {
+    return (
+      <code className="text-xs bg-muted/50 px-1.5 py-0.5 rounded max-w-50 truncate block font-mono">
+        {JSON.stringify(value)}
+      </code>
+    );
+  }
+
+  return (
+    <span className="max-w-50 truncate block text-sm">{String(value)}</span>
+  );
+}
+
 export function DataViewer() {
   const activeConnection = useActiveConnection();
   const readOnlyMode = useReadOnlyMode();
@@ -64,12 +113,16 @@ export function DataViewer() {
   const [sortBy, setSortBy] = useState<string | undefined>();
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
-  // Editing state
+  // Editing state - use ref for edited data to avoid re-renders
   const [editingRow, setEditingRow] = useState<number | null>(null);
-  const [editedData, setEditedData] = useState<RowData>({});
+  const editedDataRef = useRef<RowData | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [rowToDelete, setRowToDelete] = useState<RowData | null>(null);
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+
+  // Column resizing
+  const [columnResizeMode] = useState<ColumnResizeMode>('onChange');
+  const [columnSizing, setColumnSizing] = useState({});
 
   const totalPages = Math.ceil(totalRows / pageSize);
 
@@ -108,37 +161,52 @@ export function DataViewer() {
     }
   }, [activeConnection, selectedTable, page, pageSize, sortBy, sortOrder]);
 
-  useEffect(() => {
-    setPage(1);
-    fetchData();
-  }, [selectedTable, fetchData]);
-
+  // Fetch data when dependencies change
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
-  const getPrimaryKey = (row: RowData): Record<string, unknown> => {
-    const pkColumns = tableSchema.filter((col) => col.isPrimaryKey);
-    if (pkColumns.length === 0) {
-      // For MongoDB, use _id; for others, use first column
-      const idCol = tableSchema.find((col) => col.name === '_id' || col.name === 'id');
-      if (idCol) {
-        return { [idCol.name]: row[idCol.name] };
+  // Reset page when table changes
+  useEffect(() => {
+    setPage(1);
+  }, [selectedTable]);
+
+  const getPrimaryKey = useCallback(
+    (row: RowData): Record<string, unknown> => {
+      const pkColumns = tableSchema.filter((col) => col.isPrimaryKey);
+      if (pkColumns.length === 0) {
+        const idCol = tableSchema.find(
+          (col) => col.name === '_id' || col.name === 'id'
+        );
+        if (idCol) {
+          return { [idCol.name]: row[idCol.name] };
+        }
+        return {};
       }
-      return {};
-    }
 
-    const pk: Record<string, unknown> = {};
-    pkColumns.forEach((col) => {
-      pk[col.name] = row[col.name];
-    });
-    return pk;
-  };
+      const pk: Record<string, unknown> = {};
+      pkColumns.forEach((col) => {
+        pk[col.name] = row[col.name];
+      });
+      return pk;
+    },
+    [tableSchema]
+  );
 
-  const handleSaveRowClick = () => {
+  const handleStartEdit = useCallback((rowIndex: number, rowData: RowData) => {
+    editedDataRef.current = { ...rowData };
+    setEditingRow(rowIndex);
+  }, []);
+
+  const handleCancelEdit = useCallback(() => {
+    editedDataRef.current = null;
+    setEditingRow(null);
+  }, []);
+
+  const handleSaveRowClick = useCallback(() => {
     if (editingRow === null) return;
     setUpdateDialogOpen(true);
-  };
+  }, [editingRow]);
 
   const handleConfirmUpdate = async () => {
     if (editingRow === null || !activeConnection || !selectedTable) return;
@@ -154,7 +222,7 @@ export function DataViewer() {
           connectionId: activeConnection.id,
           table: selectedTable,
           primaryKey,
-          data: editedData,
+          data: editedDataRef.current,
           readOnly: readOnlyMode,
         }),
       });
@@ -164,7 +232,7 @@ export function DataViewer() {
       if (result.success) {
         setUpdateDialogOpen(false);
         setEditingRow(null);
-        setEditedData({});
+        editedDataRef.current = null;
         fetchData();
       } else {
         alert(result.error || 'Failed to update row');
@@ -210,7 +278,8 @@ export function DataViewer() {
           .map((h) => {
             const val = row[h];
             if (val === null || val === undefined) return '';
-            const str = typeof val === 'object' ? JSON.stringify(val) : String(val);
+            const str =
+              typeof val === 'object' ? JSON.stringify(val) : String(val);
             return str.includes(',') || str.includes('"') || str.includes('\n')
               ? `"${str.replace(/"/g, '""')}"`
               : str;
@@ -228,135 +297,65 @@ export function DataViewer() {
     URL.revokeObjectURL(url);
   };
 
-  const columns: ColumnDef<RowData, unknown>[] =
-    data.length > 0
-      ? Object.keys(data[0]).map((key) => ({
-          accessorKey: key,
-          header: () => (
-            <button
-              onClick={() => {
-                if (sortBy === key) {
-                  setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-                } else {
-                  setSortBy(key);
-                  setSortOrder('asc');
-                }
-              }}
-              className="flex items-center gap-1 font-medium hover:text-foreground"
-            >
-              {key}
-              {sortBy === key && (
-                <span className="text-xs">
-                  {sortOrder === 'asc' ? '↑' : '↓'}
-                </span>
-              )}
-            </button>
-          ),
-          cell: ({ row, getValue }) => {
-            const value = getValue();
-            const isEditing = editingRow === row.index;
+  // Memoize columns to prevent unnecessary re-renders
+  const columns: ColumnDef<RowData, unknown>[] = useMemo(() => {
+    if (data.length === 0) return [];
 
-            if (isEditing) {
-              return (
-                <Input
-                  value={editedData[key] !== undefined ? String(editedData[key]) : String(value ?? '')}
-                  onChange={(e) =>
-                    setEditedData({ ...editedData, [key]: e.target.value })
-                  }
-                  className="h-7 text-xs"
-                />
-              );
-            }
-
-            if (value === null || value === undefined) {
-              return <span className="text-muted-foreground italic">NULL</span>;
-            }
-
-            if (typeof value === 'object') {
-              return (
-                <code className="text-xs bg-muted px-1 py-0.5 rounded max-w-[200px] truncate block">
-                  {JSON.stringify(value)}
-                </code>
-              );
-            }
-
-            return (
-              <span className="max-w-[200px] truncate block">
-                {String(value)}
+    const dataColumns: ColumnDef<RowData, unknown>[] = Object.keys(data[0]).map(
+      (key) => ({
+        accessorKey: key,
+        header: () => (
+          <button
+            onClick={() => {
+              if (sortBy === key) {
+                setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+              } else {
+                setSortBy(key);
+                setSortOrder('asc');
+              }
+            }}
+            className="flex items-center gap-1.5 font-semibold text-sm hover:text-primary transition-colors text-left w-full"
+          >
+            <span className="truncate">{key}</span>
+            {sortBy === key && (
+              <span className="text-primary shrink-0">
+                {sortOrder === 'asc' ? '↑' : '↓'}
               </span>
-            );
-          },
-        }))
-      : [];
+            )}
+          </button>
+        ),
+        size: 150,
+        minSize: 60,
+        maxSize: 600,
+      })
+    );
 
-  // Add action column if not read-only
-  if (!readOnlyMode && columns.length > 0) {
-    columns.push({
-      id: 'actions',
-      header: () => <span className="sr-only">Actions</span>,
-      cell: ({ row }) => {
-        const isEditing = editingRow === row.index;
+    // Add action column if not read-only
+    if (!readOnlyMode) {
+      dataColumns.push({
+        id: 'actions',
+        header: () => (
+          <span className="text-sm font-semibold">Actions</span>
+        ),
+        size: 100,
+        minSize: 100,
+        maxSize: 100,
+        enableResizing: false,
+      });
+    }
 
-        if (isEditing) {
-          return (
-            <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                onClick={handleSaveRowClick}
-              >
-                <Save className="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                onClick={() => {
-                  setEditingRow(null);
-                  setEditedData({});
-                }}
-              >
-                <X className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          );
-        }
-
-        return (
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              onClick={() => {
-                setEditingRow(row.index);
-                setEditedData(row.original);
-              }}
-            >
-              <Edit2 className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 text-destructive"
-              onClick={() => {
-                setRowToDelete(row.original);
-                setDeleteDialogOpen(true);
-              }}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        );
-      },
-    });
-  }
+    return dataColumns;
+  }, [data, sortBy, sortOrder, readOnlyMode]);
 
   const table = useReactTable({
     data,
     columns,
     getCoreRowModel: getCoreRowModel(),
+    columnResizeMode,
+    onColumnSizingChange: setColumnSizing,
+    state: {
+      columnSizing,
+    },
   });
 
   if (!selectedTable) {
@@ -368,13 +367,13 @@ export function DataViewer() {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div className="flex flex-col h-full overflow-hidden bg-background">
       {/* Toolbar */}
-      <div className="flex items-center justify-between p-2 border-b shrink-0">
-        <div className="flex items-center gap-2">
-          <h3 className="font-medium">{selectedTable}</h3>
-          <span className="text-sm text-muted-foreground">
-            ({totalRows.toLocaleString()} rows)
+      <div className="flex items-center justify-between px-4 py-3 border-b bg-muted/30 shrink-0">
+        <div className="flex items-center gap-3">
+          <h3 className="font-semibold text-base">{selectedTable}</h3>
+          <span className="text-sm text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+            {totalRows.toLocaleString()} rows
           </span>
         </div>
 
@@ -384,82 +383,199 @@ export function DataViewer() {
             size="sm"
             onClick={fetchData}
             disabled={isLoading}
+            className="h-8"
           >
-            <RefreshCw className={cn('h-4 w-4 mr-1', isLoading && 'animate-spin')} />
+            <RefreshCw
+              className={cn('h-3.5 w-3.5 mr-1.5', isLoading && 'animate-spin')}
+            />
             Refresh
           </Button>
-          <Button variant="outline" size="sm" onClick={handleExportCSV}>
-            <Download className="h-4 w-4 mr-1" />
-            Export CSV
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportCSV}
+            className="h-8"
+          >
+            <Download className="h-3.5 w-3.5 mr-1.5" />
+            Export
           </Button>
         </div>
       </div>
 
-      {/* Table Container - takes remaining space */}
+      {/* Table Container */}
       <div className="flex-1 overflow-auto min-h-0">
-        <Table>
-          <TableHeader className="sticky top-0 bg-background z-10">
+        <table
+          className="w-full border-collapse"
+          style={{ minWidth: table.getTotalSize() || '100%' }}
+        >
+          <thead className="sticky top-0 z-10">
             {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
+              <tr key={headerGroup.id} className="bg-muted/50 backdrop-blur-sm">
                 {headerGroup.headers.map((header) => (
-                  <TableHead key={header.id} className="whitespace-nowrap bg-background">
+                  <th
+                    key={header.id}
+                    className="relative text-left px-4 py-3 border-b border-r border-border/50 bg-muted/80 first:border-l-0"
+                    style={{ width: header.getSize() }}
+                  >
                     {header.isPlaceholder
                       ? null
                       : flexRender(
                           header.column.columnDef.header,
                           header.getContext()
                         )}
-                  </TableHead>
+                    {/* Resize handle - full height */}
+                    {header.column.getCanResize() && (
+                      <div
+                        onMouseDown={header.getResizeHandler()}
+                        onTouchStart={header.getResizeHandler()}
+                        onDoubleClick={() => header.column.resetSize()}
+                        className={cn(
+                          'absolute right-0 top-0 w-1 h-full cursor-col-resize select-none touch-none',
+                          'hover:bg-primary/60 active:bg-primary',
+                          'transition-colors duration-150',
+                          header.column.getIsResizing()
+                            ? 'bg-primary'
+                            : 'bg-border/50 hover:bg-primary/40'
+                        )}
+                        style={{
+                          transform: 'translateX(50%)',
+                        }}
+                      />
+                    )}
+                  </th>
                 ))}
-              </TableRow>
+              </tr>
             ))}
-          </TableHeader>
-          <TableBody>
+          </thead>
+          <tbody>
             {isLoading ? (
-              <TableRow>
-                <TableCell
+              <tr>
+                <td
                   colSpan={columns.length}
-                  className="h-24 text-center"
+                  className="h-32 text-center text-muted-foreground"
                 >
-                  <RefreshCw className="h-4 w-4 animate-spin mx-auto" />
-                </TableCell>
-              </TableRow>
+                  <div className="flex items-center justify-center gap-2">
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    <span>Loading...</span>
+                  </div>
+                </td>
+              </tr>
             ) : table.getRowModel().rows.length === 0 ? (
-              <TableRow>
-                <TableCell
+              <tr>
+                <td
                   colSpan={columns.length}
-                  className="h-24 text-center text-muted-foreground"
+                  className="h-32 text-center text-muted-foreground"
                 >
                   No data found
-                </TableCell>
-              </TableRow>
+                </td>
+              </tr>
             ) : (
-              table.getRowModel().rows.map((row) => (
-                <TableRow
-                  key={row.id}
-                  className={cn(
-                    editingRow === row.index && 'bg-muted/50'
-                  )}
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id} className="py-2">
-                      {flexRender(
-                        cell.column.columnDef.cell,
-                        cell.getContext()
-                      )}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))
+              table.getRowModel().rows.map((row, rowIndex) => {
+                const isEditing = editingRow === row.index;
+                return (
+                  <tr
+                    key={row.id}
+                    className={cn(
+                      'border-b border-border/30 transition-colors',
+                      isEditing
+                        ? 'bg-primary/5 ring-1 ring-inset ring-primary/20'
+                        : rowIndex % 2 === 0
+                          ? 'bg-background hover:bg-muted/30'
+                          : 'bg-muted/20 hover:bg-muted/40'
+                    )}
+                  >
+                    {row.getVisibleCells().map((cell) => {
+                      const columnId = cell.column.id;
+
+                      // Handle action column
+                      if (columnId === 'actions') {
+                        return (
+                          <td
+                            key={cell.id}
+                            className="px-4 py-2 border-r border-border/30"
+                            style={{ width: cell.column.getSize() }}
+                          >
+                            {isEditing ? (
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 hover:bg-green-500/10 hover:text-green-600"
+                                  onClick={handleSaveRowClick}
+                                >
+                                  <Save className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 hover:bg-red-500/10 hover:text-red-600"
+                                  onClick={handleCancelEdit}
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 hover:bg-primary/10 hover:text-primary"
+                                  onClick={() =>
+                                    handleStartEdit(row.index, row.original)
+                                  }
+                                >
+                                  <Edit2 className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                                  onClick={() => {
+                                    setRowToDelete(row.original);
+                                    setDeleteDialogOpen(true);
+                                  }}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            )}
+                          </td>
+                        );
+                      }
+
+                      // Handle data columns
+                      const value = cell.getValue();
+                      return (
+                        <td
+                          key={cell.id}
+                          className="px-4 py-2 border-r border-border/30 relative"
+                          style={{ width: cell.column.getSize() }}
+                        >
+                          {isEditing ? (
+                            <EditableCell
+                              key={`${row.id}-${columnId}-edit`}
+                              initialValue={value}
+                              columnKey={columnId}
+                              editedDataRef={editedDataRef}
+                            />
+                          ) : (
+                            <DisplayCell value={value} />
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })
             )}
-          </TableBody>
-        </Table>
+          </tbody>
+        </table>
       </div>
 
-      {/* Pagination - always visible at bottom */}
-      <div className="flex items-center justify-between p-2 border-t shrink-0 bg-background">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span>Rows per page:</span>
+      {/* Pagination */}
+      <div className="flex items-center justify-between px-4 py-3 border-t bg-muted/30 shrink-0">
+        <div className="flex items-center gap-3 text-sm">
+          <span className="text-muted-foreground">Rows per page:</span>
           <Select
             value={pageSize.toString()}
             onValueChange={(v) => {
@@ -467,7 +583,7 @@ export function DataViewer() {
               setPage(1);
             }}
           >
-            <SelectTrigger className="h-8 w-[70px]">
+            <SelectTrigger className="h-8 w-18 text-sm">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -480,46 +596,51 @@ export function DataViewer() {
           </Select>
         </div>
 
-        <div className="flex items-center gap-1">
-          <span className="text-sm text-muted-foreground mr-2">
-            Page {page} of {totalPages || 1}
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-muted-foreground">
+            Page <span className="font-medium text-foreground">{page}</span> of{' '}
+            <span className="font-medium text-foreground">
+              {totalPages || 1}
+            </span>
           </span>
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => setPage(1)}
-            disabled={page === 1}
-          >
-            <ChevronsLeft className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => setPage(page - 1)}
-            disabled={page === 1}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => setPage(page + 1)}
-            disabled={page >= totalPages}
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => setPage(totalPages)}
-            disabled={page >= totalPages}
-          >
-            <ChevronsRight className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-1 ml-2">
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setPage(1)}
+              disabled={page === 1}
+            >
+              <ChevronsLeft className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setPage(page - 1)}
+              disabled={page === 1}
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setPage(page + 1)}
+              disabled={page >= totalPages}
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setPage(totalPages)}
+              disabled={page >= totalPages}
+            >
+              <ChevronsRight className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -548,18 +669,18 @@ export function DataViewer() {
       </Dialog>
 
       {/* Update Confirmation Dialog */}
-      <Dialog open={updateDialogOpen} onOpenChange={(open) => {
-        setUpdateDialogOpen(open);
-        if (!open) {
-          // Don't cancel editing when closing dialog
-        }
-      }}>
+      <Dialog
+        open={updateDialogOpen}
+        onOpenChange={(open) => {
+          setUpdateDialogOpen(open);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Confirm Update</DialogTitle>
             <DialogDescription>
-              Are you sure you want to update this row? This will modify the data
-              in your database.
+              Are you sure you want to update this row? This will modify the
+              data in your database.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -569,9 +690,7 @@ export function DataViewer() {
             >
               Cancel
             </Button>
-            <Button onClick={handleConfirmUpdate}>
-              Update
-            </Button>
+            <Button onClick={handleConfirmUpdate}>Update</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -108,13 +108,6 @@ export async function PUT(request: NextRequest) {
     const body = await request.json();
     const { connectionId, table, primaryKey, data, readOnly } = body;
 
-    console.log("Update request:", {
-      connectionId,
-      table,
-      primaryKey,
-      data,
-      readOnly,
-    });
 
     if (readOnly) {
       return NextResponse.json(
@@ -156,7 +149,6 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    console.log("Filtered update data:", updateData);
 
     if (Object.keys(updateData).length === 0) {
       return NextResponse.json(

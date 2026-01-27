@@ -219,7 +219,7 @@ export function ConnectionForm() {
             <Label htmlFor="connection-string">Connection String</Label>
             <Input
               id="connection-string"
-              type="password"
+              type="text"
               placeholder={selectedDb?.placeholder}
               value={connectionString}
               onChange={(e) => setConnectionString(e.target.value)}

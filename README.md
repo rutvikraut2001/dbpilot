@@ -153,6 +153,35 @@ mongodb://user:pass@localhost:27017/mydb?authSource=admin
 | **Read-Only Toggle** | Enable to prevent write operations |
 | **Theme Toggle** | Switch between light, dark, or system theme |
 
+## Updating Your Docker Image
+
+After making changes to your code, here's how to update your Docker Hub image:
+
+**1. Rebuild the image:**
+```bash
+docker build -t yourusername/db-studio:latest .
+```
+
+**2. Push to Docker Hub:**
+```bash
+docker push yourusername/db-studio:latest
+```
+
+**3. (Optional) Tag with version:**
+```bash
+docker tag yourusername/db-studio:latest yourusername/db-studio:v1.1
+docker push yourusername/db-studio:v1.1
+```
+
+**For users pulling your updated image:**
+```bash
+docker pull yourusername/db-studio:latest
+docker compose down
+docker compose up -d
+```
+
+The `:latest` tag will always point to your most recent push. Users need to explicitly pull the new image since Docker caches images locally.
+
 ## Roadmap
 
 - [ ] MySQL support

@@ -289,8 +289,6 @@ export class PostgresAdapter extends BaseAdapter {
       RETURNING *
     `;
 
-    console.log("Executing UPDATE query:", query);
-    console.log("With values:", values);
 
     const result = await pool.query(query, values);
 

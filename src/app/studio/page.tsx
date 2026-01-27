@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
 import {
@@ -44,11 +44,10 @@ import {
   useReadOnlyMode,
 } from '@/lib/stores/connection';
 import { useStudioStore, TabType } from '@/lib/stores/studio';
-import { cn } from '@/lib/utils';
 
 export default function StudioPage() {
   const router = useRouter();
-  const { theme, setTheme } = useTheme();
+  const { setTheme } = useTheme();
   const activeConnection = useActiveConnection();
   const readOnlyMode = useReadOnlyMode();
   const { setActiveConnection, toggleReadOnlyMode } = useConnectionStore();
@@ -59,6 +58,44 @@ export default function StudioPage() {
     setSidebarOpen,
     reset,
   } = useStudioStore();
+
+  // Sidebar resize state
+  const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [isResizing, setIsResizing] = useState(false);
+  const sidebarRef = useRef<HTMLDivElement>(null);
+
+  const startResizing = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  const stopResizing = useCallback(() => {
+    setIsResizing(false);
+  }, []);
+
+  const resize = useCallback(
+    (e: MouseEvent) => {
+      if (isResizing && sidebarRef.current) {
+        const newWidth = e.clientX - sidebarRef.current.getBoundingClientRect().left;
+        if (newWidth >= 200 && newWidth <= 500) {
+          setSidebarWidth(newWidth);
+        }
+      }
+    },
+    [isResizing]
+  );
+
+  useEffect(() => {
+    if (isResizing) {
+      window.addEventListener('mousemove', resize);
+      window.addEventListener('mouseup', stopResizing);
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', resize);
+      window.removeEventListener('mouseup', stopResizing);
+    };
+  }, [isResizing, resize, stopResizing]);
 
   useEffect(() => {
     // Redirect to home if no active connection
@@ -171,16 +208,26 @@ export default function StudioPage() {
       </header>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-hidden flex">
-        {/* Sidebar */}
-        <div
-          className={cn(
-            'border-r transition-all duration-200 flex flex-col',
-            sidebarOpen ? 'w-72' : 'w-0 overflow-hidden'
-          )}
-        >
-          {sidebarOpen && <TableBrowser />}
-        </div>
+      <div className="flex-1 flex overflow-hidden">
+        {/* Sidebar - resizable */}
+        {sidebarOpen && (
+          <div
+            ref={sidebarRef}
+            className="h-full overflow-hidden shrink-0 relative flex"
+            style={{ width: sidebarWidth }}
+          >
+            <div className="flex-1 overflow-auto border-r">
+              <TableBrowser />
+            </div>
+            {/* Resize Handle */}
+            <div
+              className={`w-1 cursor-ew-resize hover:bg-primary/30 active:bg-primary/50 transition-colors ${
+                isResizing ? 'bg-primary/50' : 'bg-transparent'
+              }`}
+              onMouseDown={startResizing}
+            />
+          </div>
+        )}
 
         {/* Main Panel */}
         <div className="flex-1 flex flex-col min-w-0">

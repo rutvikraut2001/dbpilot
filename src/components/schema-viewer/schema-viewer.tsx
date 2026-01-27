@@ -20,13 +20,18 @@ import {
   ReactFlowProvider,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { RefreshCw, Download, Search, X } from 'lucide-react';
+import { RefreshCw, Download, Search, X, Info, List } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 import { useStudioStore } from '@/lib/stores/studio';
 import { useActiveConnection } from '@/lib/stores/connection';
 import { Relationship, ColumnInfo } from '@/lib/adapters/types';
@@ -664,104 +669,123 @@ function SchemaViewerInner() {
           </Button>
         </Panel>
 
-        {/* Bottom Left - Stats */}
-        <Panel position="bottom-left" className="bg-background/95 backdrop-blur p-3 rounded-lg border shadow-sm max-w-xs">
-          <div className="text-xs font-medium mb-2">Database Overview</div>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Tables:</span>
-              <span className="font-medium">{stats.totalTables}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Relations:</span>
-              <span className="font-medium">{stats.totalRelationships}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">With FK:</span>
-              <span className="font-medium">{stats.tablesWithFK}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">With PK:</span>
-              <span className="font-medium">{stats.tablesWithPK}</span>
-            </div>
-          </div>
-
-          {relationships.length > 0 && (
-            <>
-              <Separator className="my-2" />
-              <div className="text-xs font-medium mb-1">Relationships</div>
-              <ScrollArea className="max-h-[150px]">
-                <div className="space-y-1">
-                  {relationships.map((rel) => {
-                    const edgeId = `edge-${rel.sourceTable}-${rel.sourceColumn}-${rel.targetTable}-${rel.targetColumn}`;
-                    const relTypeLabel = rel.type === 'one-to-one' ? '1:1' : rel.type === 'many-to-many' ? 'N:N' : '1:N';
-                    return (
-                      <div
-                        key={edgeId}
-                        className={`text-[10px] p-1.5 rounded cursor-pointer transition-colors ${
-                          selectedEdge === edgeId
-                            ? 'bg-primary/10 text-primary border border-primary/30'
-                            : 'hover:bg-muted'
-                        }`}
-                        onClick={() => setSelectedEdge(selectedEdge === edgeId ? null : edgeId)}
-                      >
-                        <div className="flex items-center gap-1.5">
-                          <span className="px-1 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-[8px] font-bold shrink-0">
-                            {relTypeLabel}
-                          </span>
-                          <div className="flex items-center gap-0.5 flex-wrap">
-                            <span className="font-medium">{rel.sourceTable}</span>
-                            <span className="text-blue-600 dark:text-blue-400">.{rel.sourceColumn}</span>
-                            <span className="mx-0.5 text-muted-foreground">→</span>
-                            <span className="font-medium">{rel.targetTable}</span>
-                            <span className="text-amber-600 dark:text-amber-400">.{rel.targetColumn}</span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+        {/* Top Left - Legend and Overview Popovers */}
+        <Panel position="top-left" className="flex gap-2">
+          {/* Legend Popover */}
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" className="bg-background">
+                <Info className="h-4 w-4 mr-1" />
+                Legend
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent side="bottom" align="start" className="w-auto p-3">
+              <div className="text-xs font-medium mb-2">Legend</div>
+              <div className="flex flex-col gap-2 text-xs">
+                {/* Column Types */}
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1">
+                    <div className="w-2.5 h-2.5 rounded-full bg-amber-500 border-2 border-amber-600"></div>
+                    <span className="text-muted-foreground">PK (Primary Key)</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-2.5 h-2.5 rounded-full bg-blue-500 border-2 border-blue-600"></div>
+                    <span className="text-muted-foreground">FK (Foreign Key)</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-red-500">*</span>
+                    <span className="text-muted-foreground">Required</span>
+                  </div>
                 </div>
-              </ScrollArea>
-            </>
-          )}
-        </Panel>
+                {/* Relationship Types */}
+                <Separator className="my-1" />
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1.5">
+                    <div className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border text-[9px] font-semibold text-slate-600 dark:text-slate-400">1:N</div>
+                    <span className="text-muted-foreground">One-to-Many</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <div className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border text-[9px] font-semibold text-slate-600 dark:text-slate-400">1:1</div>
+                    <span className="text-muted-foreground">One-to-One</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <div className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border text-[9px] font-semibold text-slate-600 dark:text-slate-400">N:N</div>
+                    <span className="text-muted-foreground">Many-to-Many</span>
+                  </div>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
 
-        {/* Legend */}
-        <Panel position="top-left" className="bg-background/95 backdrop-blur p-3 rounded-lg border shadow-sm text-xs">
-          <div className="text-xs font-medium mb-2">Legend</div>
-          <div className="flex flex-col gap-2">
-            {/* Column Types */}
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1">
-                <div className="w-2.5 h-2.5 rounded-full bg-amber-500 border-2 border-amber-600"></div>
-                <span className="text-muted-foreground">PK (Primary Key)</span>
+          {/* Overview Popover */}
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" className="bg-background">
+                <List className="h-4 w-4 mr-1" />
+                Overview
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent side="bottom" align="start" className="w-80 p-3">
+              <div className="text-xs font-medium mb-2">Database Overview</div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Tables:</span>
+                  <span className="font-medium">{stats.totalTables}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Relations:</span>
+                  <span className="font-medium">{stats.totalRelationships}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">With FK:</span>
+                  <span className="font-medium">{stats.tablesWithFK}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">With PK:</span>
+                  <span className="font-medium">{stats.tablesWithPK}</span>
+                </div>
               </div>
-              <div className="flex items-center gap-1">
-                <div className="w-2.5 h-2.5 rounded-full bg-blue-500 border-2 border-blue-600"></div>
-                <span className="text-muted-foreground">FK (Foreign Key)</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="text-red-500">*</span>
-                <span className="text-muted-foreground">Required</span>
-              </div>
-            </div>
-            {/* Relationship Types */}
-            <Separator className="my-1" />
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1.5">
-                <div className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border text-[9px] font-semibold text-slate-600 dark:text-slate-400">1:N</div>
-                <span className="text-muted-foreground">One-to-Many</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <div className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border text-[9px] font-semibold text-slate-600 dark:text-slate-400">1:1</div>
-                <span className="text-muted-foreground">One-to-One</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <div className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border text-[9px] font-semibold text-slate-600 dark:text-slate-400">N:N</div>
-                <span className="text-muted-foreground">Many-to-Many</span>
-              </div>
-            </div>
-          </div>
+
+              {relationships.length > 0 && (
+                <>
+                  <Separator className="my-2" />
+                  <div className="text-xs font-medium mb-1">Relationships</div>
+                  <ScrollArea className="max-h-[200px]">
+                    <div className="space-y-1">
+                      {relationships.map((rel) => {
+                        const edgeId = `edge-${rel.sourceTable}-${rel.sourceColumn}-${rel.targetTable}-${rel.targetColumn}`;
+                        const relTypeLabel = rel.type === 'one-to-one' ? '1:1' : rel.type === 'many-to-many' ? 'N:N' : '1:N';
+                        return (
+                          <div
+                            key={edgeId}
+                            className={`text-[10px] p-1.5 rounded cursor-pointer transition-colors ${
+                              selectedEdge === edgeId
+                                ? 'bg-primary/10 text-primary border border-primary/30'
+                                : 'hover:bg-muted'
+                            }`}
+                            onClick={() => setSelectedEdge(selectedEdge === edgeId ? null : edgeId)}
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <span className="px-1 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-[8px] font-bold shrink-0">
+                                {relTypeLabel}
+                              </span>
+                              <div className="flex items-center gap-0.5 flex-wrap">
+                                <span className="font-medium">{rel.sourceTable}</span>
+                                <span className="text-blue-600 dark:text-blue-400">.{rel.sourceColumn}</span>
+                                <span className="mx-0.5 text-muted-foreground">→</span>
+                                <span className="font-medium">{rel.targetTable}</span>
+                                <span className="text-amber-600 dark:text-amber-400">.{rel.targetColumn}</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </ScrollArea>
+                </>
+              )}
+            </PopoverContent>
+          </Popover>
         </Panel>
       </ReactFlow>
     </div>

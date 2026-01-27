@@ -46,7 +46,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { useStudioStore } from '@/lib/stores/studio';
 import { useActiveConnection, useReadOnlyMode } from '@/lib/stores/connection';
 import { PaginatedResult, ColumnInfo } from '@/lib/adapters/types';
@@ -371,9 +370,9 @@ export function DataViewer() {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full overflow-hidden">
       {/* Toolbar */}
-      <div className="flex items-center justify-between p-2 border-b">
+      <div className="flex items-center justify-between p-2 border-b shrink-0">
         <div className="flex items-center gap-2">
           <h3 className="font-medium">{selectedTable}</h3>
           <span className="text-sm text-muted-foreground">
@@ -398,14 +397,14 @@ export function DataViewer() {
         </div>
       </div>
 
-      {/* Table */}
-      <ScrollArea className="flex-1">
+      {/* Table Container - takes remaining space */}
+      <div className="flex-1 overflow-auto min-h-0">
         <Table>
-          <TableHeader>
+          <TableHeader className="sticky top-0 bg-background z-10">
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>
                 {headerGroup.headers.map((header) => (
-                  <TableHead key={header.id} className="whitespace-nowrap">
+                  <TableHead key={header.id} className="whitespace-nowrap bg-background">
                     {header.isPlaceholder
                       ? null
                       : flexRender(
@@ -457,11 +456,10 @@ export function DataViewer() {
             )}
           </TableBody>
         </Table>
-        <ScrollBar orientation="horizontal" />
-      </ScrollArea>
+      </div>
 
-      {/* Pagination */}
-      <div className="flex items-center justify-between p-2 border-t">
+      {/* Pagination - always visible at bottom */}
+      <div className="flex items-center justify-between p-2 border-t shrink-0 bg-background">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <span>Rows per page:</span>
           <Select

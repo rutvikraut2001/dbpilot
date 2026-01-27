@@ -6,6 +6,37 @@ A modern, open-source database studio for developers. Explore schemas, browse da
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
+## Quick Start
+
+### Option 1: Docker (Recommended)
+
+```bash
+# Clone and run with Docker
+git clone https://github.com/yourusername/db-studio.git
+cd db-studio
+docker compose up -d
+```
+
+Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+**With sample databases for testing:**
+```bash
+docker compose --profile with-db up -d
+```
+
+Then connect to:
+- PostgreSQL: `postgresql://postgres:postgres@postgres:5432/testdb`
+- MongoDB: `mongodb://mongo:mongo@mongodb:27017`
+
+### Option 2: Local Development
+
+```bash
+git clone https://github.com/yourusername/db-studio.git
+cd db-studio
+npm install
+npm run dev
+```
+
 ## Features
 
 - **Multi-Database Support** - Connect to PostgreSQL and MongoDB (more coming soon)
@@ -15,6 +46,8 @@ A modern, open-source database studio for developers. Explore schemas, browse da
 - **Dark/Light Theme** - Beautiful UI that adapts to your preference
 - **Read-Only Mode** - Production-safe mode to prevent accidental writes
 - **Connection Management** - Save and manage multiple database connections
+- **Resizable Sidebar** - Adjust sidebar width to your preference
+- **Docker Support** - Easy deployment with Docker and docker-compose
 
 ## Screenshots
 
@@ -83,6 +116,7 @@ npm run build
 npm start
 ```
 
+
 ## Usage
 
 ### Connecting to a Database
@@ -119,54 +153,6 @@ mongodb://user:pass@localhost:27017/mydb?authSource=admin
 | **Read-Only Toggle** | Enable to prevent write operations |
 | **Theme Toggle** | Switch between light, dark, or system theme |
 
-## Project Structure
-
-```
-src/
-├── app/
-│   ├── api/           # API routes for database operations
-│   │   ├── connect/   # Connection management
-│   │   ├── data/      # CRUD operations
-│   │   ├── query/     # Query execution
-│   │   ├── schema/    # Schema & relationships
-│   │   └── tables/    # Table listing
-│   ├── studio/        # Main studio page
-│   └── page.tsx       # Landing/connection page
-├── components/
-│   ├── connection/    # Connection form
-│   ├── data-table/    # Data viewer component
-│   ├── query-editor/  # Monaco editor wrapper
-│   ├── schema-viewer/ # React Flow ER diagram
-│   ├── sidebar/       # Table browser
-│   └── ui/            # shadcn/ui components
-└── lib/
-    ├── adapters/      # Database adapters
-    │   ├── types.ts   # Unified interfaces
-    │   ├── postgres.ts
-    │   ├── mongodb.ts
-    │   └── factory.ts
-    └── stores/        # Zustand stores
-```
-
-## Database Adapter Architecture
-
-DBPilot uses a unified adapter pattern to support multiple databases:
-
-```typescript
-interface DatabaseAdapter {
-  connect(): Promise<void>;
-  disconnect(): Promise<void>;
-  getTables(): Promise<TableInfo[]>;
-  getTableSchema(table: string): Promise<ColumnInfo[]>;
-  getTableData(table: string, options?: QueryOptions): Promise<PaginatedResult>;
-  executeQuery(query: string): Promise<QueryResult>;
-  getRelationships(): Promise<Relationship[]>;
-  // ... more methods
-}
-```
-
-Adding a new database is as simple as implementing this interface.
-
 ## Roadmap
 
 - [ ] MySQL support
@@ -179,7 +165,7 @@ Adding a new database is as simple as implementing this interface.
 - [ ] Index management
 - [ ] Saved queries
 - [ ] SSH tunneling
-- [ ] Docker image
+- [x] Docker image
 
 ## Contributing
 
@@ -205,5 +191,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 <p align="center">
-  Made with ❤️ by developers, for developers
+  Made with ❤️ by developer, for developers
 </p>

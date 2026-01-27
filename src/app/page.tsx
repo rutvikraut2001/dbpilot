@@ -1,7 +1,22 @@
-import { Database } from 'lucide-react';
-import { ConnectionForm } from '@/components/connection/connection-form';
+"use client";
+
+import { useState } from "react";
+import { Database, BookOpen, Terminal, Shield, HelpCircle } from "lucide-react";
+import { ConnectionForm } from "@/components/connection/connection-form";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 export default function Home() {
+  const [guideOpen, setGuideOpen] = useState(false);
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-muted/20">
       <div className="container mx-auto px-4 py-16">
@@ -24,8 +39,132 @@ export default function Home() {
           <ConnectionForm />
         </div>
 
+        {/* Help Button */}
+        <div className="text-center mt-10">
+          <Dialog open={guideOpen} onOpenChange={setGuideOpen}>
+            <DialogTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-2">
+                <HelpCircle className="h-4 w-4" />
+                Quick Start Guide
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-2xl max-h-[85vh]">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <BookOpen className="h-5 w-5" />
+                  Quick Start Guide
+                </DialogTitle>
+              </DialogHeader>
+              <ScrollArea className="max-h-[calc(85vh-100px)] pr-4">
+                <div className="space-y-6">
+                  {/* Connection Strings */}
+                  <Tabs defaultValue="postgresql" className="w-full">
+                    <TabsList className="grid w-full grid-cols-2">
+                      <TabsTrigger value="postgresql">PostgreSQL</TabsTrigger>
+                      <TabsTrigger value="mongodb">MongoDB</TabsTrigger>
+                    </TabsList>
+                    <TabsContent value="postgresql" className="space-y-3 mt-3">
+                      <div>
+                        <p className="text-sm font-medium mb-2">
+                          Connection String Format:
+                        </p>
+                        <code className="block bg-muted p-3 rounded-md text-xs break-all">
+                          postgresql://username:password@host:port/database
+                        </code>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium mb-2">Examples:</p>
+                        <div className="space-y-2 text-xs">
+                          <code className="block bg-muted p-2 rounded">
+                            postgresql://postgres:mypass@localhost:5432/mydb
+                          </code>
+                          <code className="block bg-muted p-2 rounded">
+                            postgresql://user:pass@db.example.com:5432/production
+                          </code>
+                          <code className="block bg-muted p-2 rounded">
+                            postgresql://postgres:pass@localhost:5432/mydb?schema=public
+                          </code>
+                        </div>
+                      </div>
+                    </TabsContent>
+                    <TabsContent value="mongodb" className="space-y-3 mt-3">
+                      <div>
+                        <p className="text-sm font-medium mb-2">
+                          Connection String Format:
+                        </p>
+                        <code className="block bg-muted p-3 rounded-md text-xs break-all">
+                          mongodb://username:password@host:port/database
+                        </code>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium mb-2">Examples:</p>
+                        <div className="space-y-2 text-xs">
+                          <code className="block bg-muted p-2 rounded">
+                            mongodb://localhost:27017/mydb
+                          </code>
+                          <code className="block bg-muted p-2 rounded">
+                            mongodb://user:pass@localhost:27017/mydb?authSource=admin
+                          </code>
+                          <code className="block bg-muted p-2 rounded">
+                            mongodb+srv://user:pass@cluster.mongodb.net/mydb
+                          </code>
+                        </div>
+                      </div>
+                    </TabsContent>
+                  </Tabs>
+
+                  {/* How to Use */}
+                  <div className="border-t pt-4">
+                    <p className="text-sm font-medium mb-3 flex items-center gap-2">
+                      <Terminal className="h-4 w-4" />
+                      How to Use
+                    </p>
+                    <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
+                      <li>Select your database type (PostgreSQL or MongoDB)</li>
+                      <li>Enter a friendly name for your connection</li>
+                      <li>Paste your connection string</li>
+                      <li>Click &quot;Test Connection&quot; to verify</li>
+                      <li>Click &quot;Connect&quot; to start exploring</li>
+                    </ol>
+                  </div>
+
+                  {/* Features */}
+                  <div className="border-t pt-4">
+                    <p className="text-sm font-medium mb-3 flex items-center gap-2">
+                      <Shield className="h-4 w-4" />
+                      Features
+                    </p>
+                    <ul className="text-sm text-muted-foreground space-y-2">
+                      <li>
+                        <strong>Data Tab:</strong> Browse and edit table data
+                        with pagination, sorting, and export to CSV
+                      </li>
+                      <li>
+                        <strong>Query Tab:</strong> Write and execute SQL or
+                        MongoDB queries with syntax highlighting
+                      </li>
+                      <li>
+                        <strong>Schema Tab:</strong> Visualize database schema
+                        as interactive ER diagrams
+                      </li>
+                      <li>
+                        <strong>Read-Only Mode:</strong> Enable to prevent
+                        accidental writes to your database
+                      </li>
+                      <li>
+                        <strong>Dark/Light Theme:</strong> Switch between themes
+                        based on your preference
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              </ScrollArea>
+            </DialogContent>
+          </Dialog>
+        </div>
+
         {/* Features */}
-        <div className="mt-16 grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl mx-auto">
+        <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl mx-auto">
           <div className="text-center p-6">
             <div className="w-12 h-12 bg-blue-500/10 rounded-lg flex items-center justify-center mx-auto mb-4">
               <svg
@@ -97,8 +236,11 @@ export default function Home() {
         </div>
 
         {/* Footer */}
-        <div className="mt-16 text-center text-sm text-muted-foreground">
-          <p>Your connection credentials are stored locally and never sent to any external server.</p>
+        <div className="mt-16 text-center space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Your connection credentials are stored locally and never sent to any
+            external server.
+          </p>
         </div>
       </div>
     </div>

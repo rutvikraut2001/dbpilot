@@ -48,7 +48,7 @@ export function ConnectionForm() {
 
       const result = await response.json();
       setTestResult(result);
-    } catch (error) {
+    } catch {
       setTestResult({
         success: false,
         message: 'Failed to test connection',
@@ -91,7 +91,7 @@ export function ConnectionForm() {
         removeConnection(connectionId);
         setTestResult(result);
       }
-    } catch (error) {
+    } catch {
       setTestResult({
         success: false,
         message: 'Failed to connect',
@@ -126,7 +126,7 @@ export function ConnectionForm() {
       } else {
         setTestResult(result);
       }
-    } catch (error) {
+    } catch {
       setTestResult({
         success: false,
         message: 'Failed to connect',

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { Play, Plus, X, Clock, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -17,7 +17,7 @@ import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { useStudioStore } from '@/lib/stores/studio';
 import { useActiveConnection, useReadOnlyMode } from '@/lib/stores/connection';
-import { cn } from '@/lib/utils';
+
 
 // Dynamically import Monaco to avoid SSR issues
 const Editor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
@@ -57,7 +57,7 @@ export function QueryEditor() {
 
       updateQueryTab(activeTab.id, { result, isExecuting: false });
       addToHistory(activeTab.query, activeConnection.name);
-    } catch (error) {
+    } catch {
       updateQueryTab(activeTab.id, {
         result: {
           rows: [],
@@ -121,12 +121,7 @@ export function QueryEditor() {
     return 'sql';
   };
 
-  const getPlaceholder = () => {
-    if (activeConnection?.type === 'mongodb') {
-      return '// MongoDB query format: db.collectionName.find({})\n// Examples:\n// db.users.find({ age: { $gt: 18 } })\n// db.orders.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }])';
-    }
-    return '-- Write your SQL query here\n-- Press Ctrl+Enter to execute\n\nSELECT * FROM your_table LIMIT 10;';
-  };
+  
 
   return (
     <div className="flex flex-col h-full" onKeyDown={handleKeyDown}>

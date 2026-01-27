@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { ConnectionConfig, DatabaseType } from '../adapters/types';
+import { ConnectionConfig } from '../adapters/types';
 
 interface ConnectionState {
   // Saved connections (persisted to localStorage)

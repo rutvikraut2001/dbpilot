@@ -50,7 +50,7 @@ export function TableBrowser() {
       } else {
         setTables(data.tables);
       }
-    } catch (error) {
+    } catch {
       setError('Failed to load tables');
     } finally {
       setIsLoadingTables(false);

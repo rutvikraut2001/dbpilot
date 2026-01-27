@@ -272,6 +272,7 @@ export class MongoDBAdapter extends BaseAdapter {
     }
 
     // Remove _id from update data if present
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { _id, ...updateData } = data;
 
     await collection.updateOne(filter, { $set: updateData });

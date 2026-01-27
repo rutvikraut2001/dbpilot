@@ -230,7 +230,7 @@ export function SchemaViewer() {
 function SchemaViewerInner() {
   const activeConnection = useActiveConnection();
   const { tables } = useStudioStore();
-  const { fitView, setCenter } = useReactFlow();
+  const { setCenter } = useReactFlow();
 
   const [nodes, setNodes, onNodesChange] = useNodesState<SchemaNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);

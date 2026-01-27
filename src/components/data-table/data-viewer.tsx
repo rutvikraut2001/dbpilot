@@ -5,7 +5,6 @@ import {
   useReactTable,
   getCoreRowModel,
   flexRender,
-  createColumnHelper,
   ColumnDef,
 } from '@tanstack/react-table';
 import {
@@ -15,7 +14,6 @@ import {
   ChevronsRight,
   RefreshCw,
   Download,
-  Plus,
   Trash2,
   Edit2,
   Save,
@@ -48,7 +46,7 @@ import {
 } from '@/components/ui/dialog';
 import { useStudioStore } from '@/lib/stores/studio';
 import { useActiveConnection, useReadOnlyMode } from '@/lib/stores/connection';
-import { PaginatedResult, ColumnInfo } from '@/lib/adapters/types';
+import { PaginatedResult } from '@/lib/adapters/types';
 import { cn } from '@/lib/utils';
 
 type RowData = Record<string, unknown>;
@@ -113,7 +111,7 @@ export function DataViewer() {
   useEffect(() => {
     setPage(1);
     fetchData();
-  }, [selectedTable]);
+  }, [selectedTable, fetchData]);
 
   useEffect(() => {
     fetchData();
@@ -234,7 +232,7 @@ export function DataViewer() {
     data.length > 0
       ? Object.keys(data[0]).map((key) => ({
           accessorKey: key,
-          header: ({ column }) => (
+          header: () => (
             <button
               onClick={() => {
                 if (sortBy === key) {

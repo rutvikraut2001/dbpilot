@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Install dependencies based on the preferred package manager
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 
 # Stage 2: Builder
 FROM node:20-alpine AS builder
@@ -13,8 +13,9 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Build the application
+# Build the application with memory limit to prevent crashes
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_OPTIONS="--max-old-space-size=1024"
 RUN npm run build
 
 # Stage 3: Runner
@@ -34,9 +35,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 USER nextjs
 
-EXPOSE 3000
+EXPOSE 3030
 
-ENV PORT=3000
+ENV PORT=3030
 ENV HOSTNAME="0.0.0.0"
 
 CMD ["node", "server.js"]

@@ -17,7 +17,7 @@ cd db-studio
 docker compose up -d
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+Open [http://localhost:3030](http://localhost:3030) in your browser.
 
 **With sample databases for testing:**
 ```bash

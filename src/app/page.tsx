@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Database, BookOpen, Terminal, Shield, HelpCircle } from "lucide-react";
+import { Database, BookOpen, Terminal, Shield, HelpCircle, Container } from "lucide-react";
 import { ConnectionForm } from "@/components/connection/connection-form";
 import { Button } from "@/components/ui/button";
 import {
@@ -156,6 +156,49 @@ export default function Home() {
                         based on your preference
                       </li>
                     </ul>
+                  </div>
+
+                  {/* Docker Usage */}
+                  <div className="border-t pt-4">
+                    <p className="text-sm font-medium mb-3 flex items-center gap-2">
+                      <Container className="h-4 w-4" />
+                      Running with Docker
+                    </p>
+                    <div className="space-y-3 text-sm">
+                      <div>
+                        <p className="text-muted-foreground mb-2">
+                          <strong>Connect to databases on your host machine:</strong>
+                        </p>
+                        <p className="text-xs text-muted-foreground mb-1">
+                          Use <code className="bg-muted px-1 rounded">host.docker.internal</code> instead of <code className="bg-muted px-1 rounded">localhost</code>
+                        </p>
+                        <div className="space-y-1 text-xs">
+                          <code className="block bg-muted p-2 rounded">
+                            postgresql://user:pass@host.docker.internal:5432/mydb
+                          </code>
+                          <code className="block bg-muted p-2 rounded">
+                            mongodb://user:pass@host.docker.internal:27017/mydb
+                          </code>
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground mb-2">
+                          <strong>Using docker-compose with test databases:</strong>
+                        </p>
+                        <code className="block bg-muted p-2 rounded text-xs mb-2">
+                          docker compose --profile with-db up -d
+                        </code>
+                        <p className="text-xs text-muted-foreground mb-1">Then connect using:</p>
+                        <div className="space-y-1 text-xs">
+                          <code className="block bg-muted p-2 rounded">
+                            postgresql://postgres:postgres@postgres:5432/testdb
+                          </code>
+                          <code className="block bg-muted p-2 rounded">
+                            mongodb://mongo:mongo@mongodb:27017
+                          </code>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </ScrollArea>

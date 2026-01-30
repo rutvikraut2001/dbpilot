@@ -7,6 +7,9 @@ services:
       - "3030:3030"
     environment:
       - NODE_ENV=production
+      - FORCE_READ_ONLY=false
+      - RATE_LIMIT_MAX_REQUESTS=100
+      - AUDIT_LOG_ENABLED=true
     restart: unless-stopped
     # Resource limits to prevent system crash
     deploy:
@@ -43,6 +46,22 @@ services:
     profiles:
       - with-db
 
+  # Optional: ClickHouse for testing
+  clickhouse:
+    image: clickhouse/clickhouse-server:24
+    ports:
+      - "8123:8123"   # HTTP interface
+      - "9000:9000"   # Native interface
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_DB: default
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    profiles:
+      - with-db
+
 volumes:
   postgres_data:
   mongo_data:
+  clickhouse_data:

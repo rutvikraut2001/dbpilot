@@ -13,4 +13,9 @@ export const supportedDatabases: { type: DatabaseType; name: string; placeholder
     name: 'MongoDB',
     placeholder: 'mongodb://user:password@localhost:27017/dbname',
   },
+  {
+    type: 'clickhouse',
+    name: 'ClickHouse',
+    placeholder: 'clickhouse://default:password@localhost:8123/default',
+  },
 ];

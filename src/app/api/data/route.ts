@@ -1,13 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCachedAdapter } from "@/lib/adapters/factory";
 import { QueryOptions } from "@/lib/adapters/types";
+import { isReadOnlyMode } from "@/lib/server-state";
+import { audit } from "@/lib/audit";
+import {
+  sanitizeError,
+  TableNameSchema,
+  ConnectionIdSchema,
+} from "@/lib/validation";
 
 // Get paginated data from a table
 export async function GET(request: NextRequest) {
+  let connectionId: string | null = null;
+  let tableName: string | null = null;
+
   try {
     const { searchParams } = new URL(request.url);
-    const connectionId = searchParams.get("connectionId");
-    const tableName = searchParams.get("table");
+    connectionId = searchParams.get("connectionId");
+    tableName = searchParams.get("table");
     const page = parseInt(searchParams.get("page") || "1");
     const pageSize = parseInt(searchParams.get("pageSize") || "50");
     const sortBy = searchParams.get("sortBy") || undefined;
@@ -15,24 +25,41 @@ export async function GET(request: NextRequest) {
       (searchParams.get("sortOrder") as "asc" | "desc") || undefined;
     const filtersJson = searchParams.get("filters");
 
-    if (!connectionId || !tableName) {
+    // Validate required parameters
+    const connectionIdResult = ConnectionIdSchema.safeParse(connectionId);
+    const tableResult = TableNameSchema.safeParse(tableName);
+
+    if (!connectionIdResult.success || !tableResult.success) {
       return NextResponse.json(
-        { error: "Missing required parameters: connectionId and table" },
-        { status: 400 },
+        { error: "Missing or invalid required parameters: connectionId and table" },
+        { status: 400 }
       );
     }
 
-    const adapter = getCachedAdapter(connectionId);
+    const adapter = getCachedAdapter(connectionId!);
 
     if (!adapter) {
       return NextResponse.json(
         { error: "Connection not found. Please reconnect." },
-        { status: 404 },
+        { status: 404 }
       );
     }
 
     if (!adapter.isConnected()) {
       await adapter.connect();
+    }
+
+    // Parse filters safely
+    let filters: Record<string, unknown> | undefined;
+    if (filtersJson) {
+      try {
+        filters = JSON.parse(filtersJson);
+      } catch {
+        return NextResponse.json(
+          { error: "Invalid filters format" },
+          { status: 400 }
+        );
+      }
     }
 
     const options: QueryOptions = {
@@ -40,47 +67,78 @@ export async function GET(request: NextRequest) {
       pageSize: Math.min(pageSize, 100), // Max 100 rows per page
       sortBy,
       sortOrder,
-      filters: filtersJson ? JSON.parse(filtersJson) : undefined,
+      filters,
     };
 
-    const result = await adapter.getRows(tableName, options);
+    const result = await adapter.getRows(tableName!, options);
+
+    audit("data.read", {
+      connectionId: connectionId!,
+      details: { table: tableName, page, pageSize },
+      success: true,
+    });
 
     return NextResponse.json(result);
   } catch (error) {
     console.error("Get data error:", error);
+
+    audit("data.read", {
+      connectionId: connectionId ?? undefined,
+      details: { table: tableName },
+      success: false,
+      error: sanitizeError(error),
+    });
+
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to get data" },
-      { status: 500 },
+      { error: sanitizeError(error) },
+      { status: 500 }
     );
   }
 }
 
 // Insert a new row
 export async function POST(request: NextRequest) {
+  let connectionId: string | undefined;
+  let table: string | undefined;
+
   try {
     const body = await request.json();
-    const { connectionId, table, data, readOnly } = body;
+    connectionId = body.connectionId;
+    table = body.table;
+    const data = body.data;
 
-    if (readOnly) {
+    // Validate required fields
+    const connectionIdResult = ConnectionIdSchema.safeParse(connectionId);
+    const tableResult = TableNameSchema.safeParse(table);
+
+    if (!connectionIdResult.success || !tableResult.success || !data) {
+      return NextResponse.json(
+        { error: "Missing or invalid required fields: connectionId, table, and data" },
+        { status: 400 }
+      );
+    }
+
+    // SERVER-SIDE read-only check - cannot be bypassed by client
+    if (isReadOnlyMode(connectionId!)) {
+      audit("data.insert", {
+        connectionId,
+        details: { table },
+        success: false,
+        error: "Read-only mode",
+      });
+
       return NextResponse.json(
         { error: "Cannot insert data in read-only mode" },
-        { status: 403 },
+        { status: 403 }
       );
     }
 
-    if (!connectionId || !table || !data) {
-      return NextResponse.json(
-        { error: "Missing required fields: connectionId, table, and data" },
-        { status: 400 },
-      );
-    }
-
-    const adapter = getCachedAdapter(connectionId);
+    const adapter = getCachedAdapter(connectionId!);
 
     if (!adapter) {
       return NextResponse.json(
         { error: "Connection not found. Please reconnect." },
-        { status: 404 },
+        { status: 404 }
       );
     }
 
@@ -88,50 +146,84 @@ export async function POST(request: NextRequest) {
       await adapter.connect();
     }
 
-    const result = await adapter.insertRow(table, data);
+    const result = await adapter.insertRow(table!, data);
+
+    audit("data.insert", {
+      connectionId,
+      details: { table },
+      success: true,
+    });
 
     return NextResponse.json({ success: true, data: result });
   } catch (error) {
     console.error("Insert error:", error);
+
+    audit("data.insert", {
+      connectionId,
+      details: { table },
+      success: false,
+      error: sanitizeError(error),
+    });
+
     return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Failed to insert row",
-      },
-      { status: 500 },
+      { error: sanitizeError(error) },
+      { status: 500 }
     );
   }
 }
 
 // Update an existing row
 export async function PUT(request: NextRequest) {
+  let connectionId: string | undefined;
+  let table: string | undefined;
+
   try {
     const body = await request.json();
-    const { connectionId, table, primaryKey, data, readOnly } = body;
+    connectionId = body.connectionId;
+    table = body.table;
+    const primaryKey = body.primaryKey;
+    const data = body.data;
 
+    // Validate required fields
+    const connectionIdResult = ConnectionIdSchema.safeParse(connectionId);
+    const tableResult = TableNameSchema.safeParse(table);
 
-    if (readOnly) {
-      return NextResponse.json(
-        { error: "Cannot update data in read-only mode" },
-        { status: 403 },
-      );
-    }
-
-    if (!connectionId || !table || !primaryKey || !data) {
+    if (
+      !connectionIdResult.success ||
+      !tableResult.success ||
+      !primaryKey ||
+      !data
+    ) {
       return NextResponse.json(
         {
           error:
-            "Missing required fields: connectionId, table, primaryKey, and data",
+            "Missing or invalid required fields: connectionId, table, primaryKey, and data",
         },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
-    const adapter = getCachedAdapter(connectionId);
+    // SERVER-SIDE read-only check - cannot be bypassed by client
+    if (isReadOnlyMode(connectionId!)) {
+      audit("data.update", {
+        connectionId,
+        details: { table },
+        success: false,
+        error: "Read-only mode",
+      });
+
+      return NextResponse.json(
+        { error: "Cannot update data in read-only mode" },
+        { status: 403 }
+      );
+    }
+
+    const adapter = getCachedAdapter(connectionId!);
 
     if (!adapter) {
       return NextResponse.json(
         { error: "Connection not found. Please reconnect." },
-        { status: 404 },
+        { status: 404 }
       );
     }
 
@@ -149,62 +241,87 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-
     if (Object.keys(updateData).length === 0) {
       return NextResponse.json(
         {
           error: "No fields to update (only primary key fields were provided)",
         },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
-    const result = await adapter.updateRow(table, primaryKey, updateData);
+    const result = await adapter.updateRow(table!, primaryKey, updateData);
+
+    audit("data.update", {
+      connectionId,
+      details: { table },
+      success: true,
+    });
 
     return NextResponse.json({ success: true, data: result });
   } catch (error) {
     console.error("Update error:", error);
+
+    audit("data.update", {
+      connectionId,
+      details: { table },
+      success: false,
+      error: sanitizeError(error),
+    });
+
     return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Failed to update row",
-      },
-      { status: 500 },
+      { error: sanitizeError(error) },
+      { status: 500 }
     );
   }
 }
 
 // Delete a row
 export async function DELETE(request: NextRequest) {
+  let connectionId: string | null = null;
+  let table: string | null = null;
+
   try {
     const { searchParams } = new URL(request.url);
-    const connectionId = searchParams.get("connectionId");
-    const table = searchParams.get("table");
+    connectionId = searchParams.get("connectionId");
+    table = searchParams.get("table");
     const primaryKeyJson = searchParams.get("primaryKey");
-    const readOnly = searchParams.get("readOnly") === "true";
 
-    if (readOnly) {
-      return NextResponse.json(
-        { error: "Cannot delete data in read-only mode" },
-        { status: 403 },
-      );
-    }
+    // Validate required parameters
+    const connectionIdResult = ConnectionIdSchema.safeParse(connectionId);
+    const tableResult = TableNameSchema.safeParse(table);
 
-    if (!connectionId || !table || !primaryKeyJson) {
+    if (!connectionIdResult.success || !tableResult.success || !primaryKeyJson) {
       return NextResponse.json(
         {
           error:
-            "Missing required parameters: connectionId, table, and primaryKey",
+            "Missing or invalid required parameters: connectionId, table, and primaryKey",
         },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
-    const adapter = getCachedAdapter(connectionId);
+    // SERVER-SIDE read-only check - cannot be bypassed by client
+    if (isReadOnlyMode(connectionId!)) {
+      audit("data.delete", {
+        connectionId: connectionId!,
+        details: { table },
+        success: false,
+        error: "Read-only mode",
+      });
+
+      return NextResponse.json(
+        { error: "Cannot delete data in read-only mode" },
+        { status: 403 }
+      );
+    }
+
+    const adapter = getCachedAdapter(connectionId!);
 
     if (!adapter) {
       return NextResponse.json(
         { error: "Connection not found. Please reconnect." },
-        { status: 404 },
+        { status: 404 }
       );
     }
 
@@ -212,17 +329,38 @@ export async function DELETE(request: NextRequest) {
       await adapter.connect();
     }
 
-    const primaryKey = JSON.parse(primaryKeyJson);
-    const success = await adapter.deleteRow(table, primaryKey);
+    let primaryKey: Record<string, unknown>;
+    try {
+      primaryKey = JSON.parse(primaryKeyJson);
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid primaryKey format" },
+        { status: 400 }
+      );
+    }
+
+    const success = await adapter.deleteRow(table!, primaryKey);
+
+    audit("data.delete", {
+      connectionId: connectionId!,
+      details: { table },
+      success: true,
+    });
 
     return NextResponse.json({ success });
   } catch (error) {
     console.error("Delete error:", error);
+
+    audit("data.delete", {
+      connectionId: connectionId ?? undefined,
+      details: { table },
+      success: false,
+      error: sanitizeError(error),
+    });
+
     return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Failed to delete row",
-      },
-      { status: 500 },
+      { error: sanitizeError(error) },
+      { status: 500 }
     );
   }
 }

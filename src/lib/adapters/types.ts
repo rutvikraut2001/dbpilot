@@ -1,6 +1,12 @@
 // Database Adapter Types - Unified interface for all database types
 
-export type DatabaseType = 'postgresql' | 'mongodb';
+export type DatabaseType = 'postgresql' | 'mongodb' | 'clickhouse';
+
+export interface AdapterCapabilities {
+  supportsUpdate: boolean;
+  supportsDelete: boolean;
+  supportsTransactions: boolean;
+}
 
 export interface ConnectionConfig {
   type: DatabaseType;
@@ -81,6 +87,9 @@ export interface IndexInfo {
 
 // The unified database adapter interface
 export interface DatabaseAdapter {
+  // Adapter capabilities (for adapters with limitations like ClickHouse)
+  readonly capabilities?: AdapterCapabilities;
+
   // Connection management
   connect(): Promise<void>;
   disconnect(): Promise<void>;

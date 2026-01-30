@@ -3,6 +3,7 @@ import 'server-only';
 import { DatabaseAdapter, DatabaseType } from './types';
 import { PostgresAdapter } from './postgres';
 import { MongoDBAdapter } from './mongodb';
+import { ClickHouseAdapter } from './clickhouse';
 
 // Adapter cache to reuse connections
 const adapterCache = new Map<string, DatabaseAdapter>();
@@ -13,6 +14,8 @@ export function createAdapter(type: DatabaseType, connectionString: string): Dat
       return new PostgresAdapter(connectionString);
     case 'mongodb':
       return new MongoDBAdapter(connectionString);
+    case 'clickhouse':
+      return new ClickHouseAdapter(connectionString);
     default:
       throw new Error(`Unsupported database type: ${type}`);
   }

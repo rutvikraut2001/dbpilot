@@ -17,8 +17,8 @@ interface ConnectionState {
   updateConnection: (id: string, updates: Partial<ConnectionConfig>) => void;
   removeConnection: (id: string) => void;
   setActiveConnection: (id: string | null) => void;
-  toggleReadOnlyMode: () => void;
-  setReadOnlyMode: (value: boolean) => void;
+  toggleReadOnlyMode: () => Promise<void>;
+  setReadOnlyMode: (value: boolean) => Promise<void>;
   getConnection: (id: string) => ConnectionConfig | undefined;
   getActiveConnection: () => ConnectionConfig | undefined;
 }
@@ -63,12 +63,52 @@ export const useConnectionStore = create<ConnectionState>()(
         set({ activeConnectionId: id });
       },
 
-      toggleReadOnlyMode: () => {
-        set((state) => ({ readOnlyMode: !state.readOnlyMode }));
+      toggleReadOnlyMode: async () => {
+        const { activeConnectionId, readOnlyMode } = get();
+        const newValue = !readOnlyMode;
+
+        // Update local state immediately for responsiveness
+        set({ readOnlyMode: newValue });
+
+        // Sync with server-side state
+        if (activeConnectionId) {
+          try {
+            await fetch('/api/settings', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                connectionId: activeConnectionId,
+                readOnly: newValue,
+              }),
+            });
+          } catch (error) {
+            console.error('Failed to sync read-only mode with server:', error);
+            // Revert on failure
+            set({ readOnlyMode: !newValue });
+          }
+        }
       },
 
-      setReadOnlyMode: (value) => {
+      setReadOnlyMode: async (value) => {
+        const { activeConnectionId } = get();
+
         set({ readOnlyMode: value });
+
+        // Sync with server-side state
+        if (activeConnectionId) {
+          try {
+            await fetch('/api/settings', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                connectionId: activeConnectionId,
+                readOnly: value,
+              }),
+            });
+          } catch (error) {
+            console.error('Failed to sync read-only mode with server:', error);
+          }
+        }
       },
 
       getConnection: (id) => {

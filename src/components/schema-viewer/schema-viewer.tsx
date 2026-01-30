@@ -18,9 +18,12 @@ import {
   Position,
   useReactFlow,
   ReactFlowProvider,
+  getNodesBounds,
+  getViewportForBounds,
 } from '@xyflow/react';
+import { toPng, toSvg } from 'html-to-image';
 import '@xyflow/react/dist/style.css';
-import { RefreshCw, Download, Search, X, Info, List } from 'lucide-react';
+import { RefreshCw, Download, Search, X, Info, List, Image, FileCode } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -32,6 +35,12 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { useStudioStore } from '@/lib/stores/studio';
 import { useActiveConnection } from '@/lib/stores/connection';
 import { Relationship, ColumnInfo } from '@/lib/adapters/types';
@@ -489,19 +498,94 @@ function SchemaViewerInner() {
     setSelectedEdge(null);
   }, []);
 
-  const handleExportImage = useCallback(() => {
-    const svg = document.querySelector('.react-flow__viewport');
-    if (!svg) return;
+  const [isExporting, setIsExporting] = useState(false);
+  const { getNodes } = useReactFlow();
 
-    const svgData = new XMLSerializer().serializeToString(svg);
-    const blob = new Blob([svgData], { type: 'image/svg+xml' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `schema_${activeConnection?.name || 'database'}.svg`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [activeConnection?.name]);
+  const handleExportImage = useCallback(async (format: 'png' | 'svg' = 'png') => {
+    const viewport = document.querySelector('.react-flow__viewport') as HTMLElement;
+    if (!viewport || nodes.length === 0) return;
+
+    setIsExporting(true);
+
+    try {
+      // Get current nodes from React Flow
+      const currentNodes = getNodes();
+
+      // Calculate bounds of all nodes with padding
+      const nodesBounds = getNodesBounds(currentNodes);
+      const padding = 80;
+
+      // Calculate dimensions - ensure minimum size
+      const imageWidth = Math.max(800, nodesBounds.width + padding * 2);
+      const imageHeight = Math.max(600, nodesBounds.height + padding * 2);
+
+      // Get viewport transformation that fits all nodes
+      const transform = getViewportForBounds(
+        nodesBounds,
+        imageWidth,
+        imageHeight,
+        0.5, // minZoom
+        2,   // maxZoom
+        padding
+      );
+
+      // Export options
+      const exportOptions = {
+        backgroundColor: '#ffffff',
+        width: imageWidth,
+        height: imageHeight,
+        style: {
+          width: `${imageWidth}px`,
+          height: `${imageHeight}px`,
+          transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.zoom})`,
+        },
+        // Ensure all CSS is captured
+        cacheBust: true,
+        // Filter out interactive UI elements from export
+        filter: (node: Element) => {
+          // Include all nodes by default
+          if (!(node instanceof HTMLElement)) return true;
+          const classList = node.classList;
+          if (!classList || classList.length === 0) return true;
+          // Exclude minimap, controls, panel, and attribution
+          const excludeClasses = [
+            'react-flow__minimap',
+            'react-flow__controls',
+            'react-flow__panel',
+            'react-flow__attribution',
+          ];
+          return !excludeClasses.some(cls => classList.contains(cls));
+        },
+      };
+
+      let dataUrl: string;
+      let filename: string;
+
+      if (format === 'svg') {
+        dataUrl = await toSvg(viewport, exportOptions);
+        filename = `schema_${activeConnection?.name || 'database'}.svg`;
+      } else {
+        dataUrl = await toPng(viewport, {
+          ...exportOptions,
+          pixelRatio: 2, // Higher quality for PNG
+        });
+        filename = `schema_${activeConnection?.name || 'database'}.png`;
+      }
+
+      // Create download link
+      const link = document.createElement('a');
+      link.download = filename;
+      link.href = dataUrl;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (error) {
+      console.error('Failed to export schema:', error);
+      alert('Failed to export schema. Please try again.');
+    } finally {
+      setIsExporting(false);
+    }
+  }, [nodes, activeConnection?.name, getNodes]);
 
   // Stats summary
   const stats = useMemo(() => {
@@ -663,10 +747,28 @@ function SchemaViewerInner() {
             <RefreshCw className={isLoading ? 'h-4 w-4 animate-spin mr-1' : 'h-4 w-4 mr-1'} />
             Refresh
           </Button>
-          <Button variant="outline" size="sm" onClick={handleExportImage} className="bg-background">
-            <Download className="h-4 w-4 mr-1" />
-            Export
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="bg-background" disabled={isExporting}>
+                {isExporting ? (
+                  <RefreshCw className="h-4 w-4 mr-1 animate-spin" />
+                ) : (
+                  <Download className="h-4 w-4 mr-1" />
+                )}
+                Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => handleExportImage('png')}>
+                <Image className="h-4 w-4 mr-2" />
+                Export as PNG
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExportImage('svg')}>
+                <FileCode className="h-4 w-4 mr-2" />
+                Export as SVG
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </Panel>
 
         {/* Top Left - Legend and Overview Popovers */}

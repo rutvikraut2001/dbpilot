@@ -74,6 +74,36 @@ export class PostgresAdapter extends BaseAdapter {
     return this.pool;
   }
 
+  /**
+   * Validate an identifier (table or column name) to prevent SQL injection.
+   * Only allows alphanumeric, underscore, and dot (for schema.table format).
+   */
+  private validateIdentifier(name: string): void {
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$/.test(name)) {
+      throw new Error(`Invalid identifier: ${name}`);
+    }
+  }
+
+  /**
+   * Validate a column name to prevent SQL injection.
+   */
+  private validateColumnName(name: string): void {
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+      throw new Error(`Invalid column name: ${name}`);
+    }
+  }
+
+  /**
+   * Quote and validate an identifier for safe use in queries.
+   */
+  private quoteIdentifier(name: string): string {
+    this.validateIdentifier(name);
+    return name
+      .split(".")
+      .map((part) => `"${part}"`)
+      .join(".");
+  }
+
   async getTables(): Promise<TableInfo[]> {
     const pool = this.getPool();
 
@@ -201,34 +231,39 @@ export class PostgresAdapter extends BaseAdapter {
     const pool = this.getPool();
     const { page, pageSize, sortBy, sortOrder, filters } = options;
 
+    // Validate and quote table name to prevent SQL injection
+    const quotedTable = this.quoteIdentifier(table);
     const offset = (page - 1) * pageSize;
     const params: unknown[] = [];
     let paramIndex = 1;
 
-    // Build WHERE clause from filters
+    // Build WHERE clause from filters with validated column names
     let whereClause = "";
     if (filters && Object.keys(filters).length > 0) {
       const conditions = Object.entries(filters).map(([key, value]) => {
+        this.validateColumnName(key);
         params.push(value);
         return `"${key}" = $${paramIndex++}`;
       });
       whereClause = `WHERE ${conditions.join(" AND ")}`;
     }
 
-    // Build ORDER BY clause
-    const orderClause = sortBy
-      ? `ORDER BY "${sortBy}" ${sortOrder === "desc" ? "DESC" : "ASC"}`
-      : "";
+    // Build ORDER BY clause with validated column name
+    let orderClause = "";
+    if (sortBy) {
+      this.validateColumnName(sortBy);
+      orderClause = `ORDER BY "${sortBy}" ${sortOrder === "desc" ? "DESC" : "ASC"}`;
+    }
 
     // Get total count
-    const countQuery = `SELECT COUNT(*) as total FROM ${table} ${whereClause}`;
+    const countQuery = `SELECT COUNT(*) as total FROM ${quotedTable} ${whereClause}`;
     const countResult = await pool.query(countQuery, params);
     const total = parseInt(countResult.rows[0].total);
 
     // Get paginated data
     params.push(pageSize, offset);
     const dataQuery = `
-      SELECT * FROM ${table}
+      SELECT * FROM ${quotedTable}
       ${whereClause}
       ${orderClause}
       LIMIT $${paramIndex++} OFFSET $${paramIndex}
@@ -250,12 +285,16 @@ export class PostgresAdapter extends BaseAdapter {
   ): Promise<Record<string, unknown>> {
     const pool = this.getPool();
 
+    // Validate table and column names to prevent SQL injection
+    const quotedTable = this.quoteIdentifier(table);
     const columns = Object.keys(data);
+    columns.forEach((col) => this.validateColumnName(col));
+
     const values = Object.values(data);
     const placeholders = columns.map((_, i) => `$${i + 1}`);
 
     const query = `
-      INSERT INTO ${table} (${columns.map((c) => `"${c}"`).join(", ")})
+      INSERT INTO ${quotedTable} (${columns.map((c) => `"${c}"`).join(", ")})
       VALUES (${placeholders.join(", ")})
       RETURNING *
     `;
@@ -271,7 +310,12 @@ export class PostgresAdapter extends BaseAdapter {
   ): Promise<Record<string, unknown>> {
     const pool = this.getPool();
 
+    // Validate table and column names to prevent SQL injection
+    const quotedTable = this.quoteIdentifier(table);
     const setColumns = Object.keys(data);
+    setColumns.forEach((col) => this.validateColumnName(col));
+    Object.keys(primaryKey).forEach((col) => this.validateColumnName(col));
+
     const values = [...Object.values(data), ...Object.values(primaryKey)];
 
     const setClause = setColumns
@@ -283,12 +327,11 @@ export class PostgresAdapter extends BaseAdapter {
       .join(" AND ");
 
     const query = `
-      UPDATE ${table}
+      UPDATE ${quotedTable}
       SET ${setClause}
       WHERE ${whereClause}
       RETURNING *
     `;
-
 
     const result = await pool.query(query, values);
 
@@ -307,11 +350,15 @@ export class PostgresAdapter extends BaseAdapter {
   ): Promise<boolean> {
     const pool = this.getPool();
 
+    // Validate table and column names to prevent SQL injection
+    const quotedTable = this.quoteIdentifier(table);
+    Object.keys(primaryKey).forEach((col) => this.validateColumnName(col));
+
     const whereClause = Object.keys(primaryKey)
       .map((col, i) => `"${col}" = $${i + 1}`)
       .join(" AND ");
 
-    const query = `DELETE FROM ${table} WHERE ${whereClause}`;
+    const query = `DELETE FROM ${quotedTable} WHERE ${whereClause}`;
     const result = await pool.query(query, Object.values(primaryKey));
 
     return (result.rowCount ?? 0) > 0;

@@ -3,6 +3,13 @@ import { TableInfo, ColumnInfo, QueryResult } from '../adapters/types';
 
 export type TabType = 'data' | 'schema' | 'query' | 'analytics';
 
+export interface DataTab {
+  id: string;
+  tableName: string;
+  filter?: { column: string; value: unknown };
+  label: string;
+}
+
 interface QueryTab {
   id: string;
   name: string;
@@ -21,6 +28,10 @@ interface StudioState {
 
   // Active tab in the main panel
   activeTab: TabType;
+
+  // Data tabs
+  dataTabs: DataTab[];
+  activeDataTabId: string | null;
 
   // Query tabs
   queryTabs: QueryTab[];
@@ -49,6 +60,11 @@ interface StudioState {
   setTableFilter: (filter: string) => void;
   setError: (error: string | null) => void;
 
+  // Data tab actions
+  addDataTab: (tableName: string, filter?: { column: string; value: unknown }) => string;
+  removeDataTab: (id: string) => void;
+  setActiveDataTab: (id: string) => void;
+
   // Query tab actions
   addQueryTab: () => string;
   removeQueryTab: (id: string) => void;
@@ -60,7 +76,7 @@ interface StudioState {
   reset: () => void;
 }
 
-const generateTabId = () => `query_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+const generateTabId = (prefix = 'tab') => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
 const initialQueryTab: QueryTab = {
   id: generateTabId(),
@@ -77,6 +93,8 @@ const initialState = {
   isLoadingTables: false,
   isLoadingSchema: false,
   activeTab: 'data' as TabType,
+  dataTabs: [] as DataTab[],
+  activeDataTabId: null as string | null,
   queryTabs: [initialQueryTab],
   activeQueryTabId: initialQueryTab.id,
   queryHistory: [],
@@ -108,6 +126,50 @@ export const useStudioStore = create<StudioState>()((set, get) => ({
   setTableFilter: (filter) => set({ tableFilter: filter }),
 
   setError: (error) => set({ error }),
+
+  addDataTab: (tableName, filter) => {
+    const { dataTabs } = get();
+    const label = filter
+      ? `${tableName} (${filter.column} = ${String(filter.value)})`
+      : tableName;
+    const newTab: DataTab = {
+      id: generateTabId('data'),
+      tableName,
+      filter,
+      label,
+    };
+
+    set({
+      dataTabs: [...dataTabs, newTab],
+      activeDataTabId: newTab.id,
+      activeTab: 'data',
+    });
+
+    return newTab.id;
+  },
+
+  removeDataTab: (id) => {
+    const { dataTabs, activeDataTabId } = get();
+
+    const newTabs = dataTabs.filter((tab) => tab.id !== id);
+    let newActiveId = activeDataTabId;
+
+    if (activeDataTabId === id) {
+      if (newTabs.length > 0) {
+        const removedIndex = dataTabs.findIndex((tab) => tab.id === id);
+        newActiveId = newTabs[Math.min(removedIndex, newTabs.length - 1)]?.id || null;
+      } else {
+        newActiveId = null;
+      }
+    }
+
+    set({
+      dataTabs: newTabs,
+      activeDataTabId: newActiveId,
+    });
+  },
+
+  setActiveDataTab: (id) => set({ activeDataTabId: id }),
 
   addQueryTab: () => {
     const { queryTabs } = get();
@@ -178,6 +240,8 @@ export const useStudioStore = create<StudioState>()((set, get) => ({
 
     set({
       ...initialState,
+      dataTabs: [],
+      activeDataTabId: null,
       queryTabs: [newTab],
       activeQueryTabId: newTab.id,
     });

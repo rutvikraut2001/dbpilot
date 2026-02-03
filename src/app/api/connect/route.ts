@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   createAdapter,
   getOrCreateAdapter,
+  getCachedAdapter,
   removeAdapter,
 } from "@/lib/adapters/factory";
 import { DatabaseType } from "@/lib/adapters/types";
@@ -11,6 +12,44 @@ import {
 } from "@/lib/server-state";
 import { audit } from "@/lib/audit";
 import { sanitizeError } from "@/lib/validation";
+
+// Check if a connection exists and is healthy (lightweight check)
+export async function GET(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const connectionId = searchParams.get("connectionId");
+
+    if (!connectionId) {
+      return NextResponse.json(
+        { error: "Missing connectionId parameter" },
+        { status: 400 }
+      );
+    }
+
+    // Check if adapter exists in cache
+    const adapter = getCachedAdapter(connectionId);
+    if (!adapter) {
+      return NextResponse.json({ exists: false, healthy: false });
+    }
+
+    // Lightweight health check using ping (no new connections created)
+    try {
+      const healthy = await adapter.ping();
+      return NextResponse.json({
+        exists: true,
+        healthy,
+      });
+    } catch {
+      return NextResponse.json({ exists: true, healthy: false });
+    }
+  } catch (error) {
+    console.error("Health check error:", error);
+    return NextResponse.json(
+      { exists: false, healthy: false, error: sanitizeError(error) },
+      { status: 500 }
+    );
+  }
+}
 
 // Test a database connection
 export async function POST(request: NextRequest) {

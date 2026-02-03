@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCachedAdapter } from '@/lib/adapters/factory';
+import { schemaCache, CACHE_TTL, cacheKey } from '@/lib/cache';
+import { TableInfo } from '@/lib/adapters/types';
 
 // Get all tables/collections for a connection
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const connectionId = searchParams.get('connectionId');
+    const noCache = searchParams.get('noCache') === 'true';
 
     if (!connectionId) {
       return NextResponse.json(
@@ -27,7 +30,19 @@ export async function GET(request: NextRequest) {
       await adapter.connect();
     }
 
+    // Check cache first (unless noCache is requested)
+    const tablesCacheKey = cacheKey.tables(connectionId);
+    if (!noCache) {
+      const cached = schemaCache.get<TableInfo[]>(tablesCacheKey);
+      if (cached) {
+        return NextResponse.json({ tables: cached });
+      }
+    }
+
     const tables = await adapter.getTables();
+
+    // Cache the result
+    schemaCache.set(tablesCacheKey, tables, CACHE_TTL.TABLES);
 
     return NextResponse.json({ tables });
   } catch (error) {

@@ -12,6 +12,9 @@ interface ConnectionState {
   // Read-only mode for production safety
   readOnlyMode: boolean;
 
+  // Hydration state (for SSR/refresh handling)
+  _hasHydrated: boolean;
+
   // Actions
   addConnection: (connection: Omit<ConnectionConfig, 'id'>) => string;
   updateConnection: (id: string, updates: Partial<ConnectionConfig>) => void;
@@ -21,6 +24,7 @@ interface ConnectionState {
   setReadOnlyMode: (value: boolean) => Promise<void>;
   getConnection: (id: string) => ConnectionConfig | undefined;
   getActiveConnection: () => ConnectionConfig | undefined;
+  setHasHydrated: (state: boolean) => void;
 }
 
 // Generate a simple unique ID
@@ -32,6 +36,11 @@ export const useConnectionStore = create<ConnectionState>()(
       connections: [],
       activeConnectionId: null,
       readOnlyMode: false,
+      _hasHydrated: false,
+
+      setHasHydrated: (state: boolean) => {
+        set({ _hasHydrated: state });
+      },
 
       addConnection: (connection) => {
         const id = generateId();
@@ -122,11 +131,15 @@ export const useConnectionStore = create<ConnectionState>()(
     }),
     {
       name: 'db-studio-connections',
-      // Don't persist active connection - user should reconnect each session
+      // Persist active connection ID so user stays connected after refresh
       partialize: (state) => ({
         connections: state.connections,
         readOnlyMode: state.readOnlyMode,
+        activeConnectionId: state.activeConnectionId,
       }),
+      onRehydrateStorage: () => (state) => {
+        state?.setHasHydrated(true);
+      },
     }
   )
 );
@@ -139,3 +152,4 @@ export const useActiveConnection = () => {
 
 export const useConnections = () => useConnectionStore((state) => state.connections);
 export const useReadOnlyMode = () => useConnectionStore((state) => state.readOnlyMode);
+export const useHasHydrated = () => useConnectionStore((state) => state._hasHydrated);

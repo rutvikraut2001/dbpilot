@@ -31,6 +31,17 @@ export class ClickHouseAdapter extends BaseAdapter {
       username,
       password,
       database,
+      // Production-ready settings
+      request_timeout: 30000, // 30 second timeout
+      max_open_connections: 20, // Connection pool size
+      keep_alive: {
+        enabled: true,
+        idle_socket_ttl: 30000, // 30 seconds
+      },
+      compression: {
+        request: true, // Compress requests
+        response: true, // Decompress responses
+      },
     });
 
     // Test connection
@@ -63,7 +74,7 @@ export class ClickHouseAdapter extends BaseAdapter {
         query: "SELECT version() as version",
         format: "JSONEachRow",
       });
-      const data = await result.json() as { version: string }[];
+      const data = (await result.json()) as { version: string }[];
       await testClient.close();
 
       const firstRow = data[0];
@@ -77,6 +88,19 @@ export class ClickHouseAdapter extends BaseAdapter {
         success: false,
         message: error instanceof Error ? error.message : "Connection failed",
       };
+    }
+  }
+
+  /**
+   * Lightweight health check using existing connection (no new connections).
+   */
+  async ping(): Promise<boolean> {
+    if (!this.client) return false;
+    try {
+      await this.client.ping();
+      return true;
+    } catch {
+      return false;
     }
   }
 

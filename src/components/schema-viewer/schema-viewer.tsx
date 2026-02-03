@@ -637,6 +637,37 @@ function SchemaViewerInner() {
         .react-flow__edge.selected .react-flow__edge-path {
           stroke: #6366f1 !important;
         }
+        /* Controls styling for dark mode */
+        .react-flow__controls {
+          box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
+        }
+        .react-flow__controls-button {
+          background: hsl(var(--background));
+          border-bottom: 1px solid hsl(var(--border));
+          fill: hsl(var(--foreground));
+        }
+        .react-flow__controls-button:hover {
+          background: hsl(var(--muted));
+        }
+        .react-flow__controls-button svg {
+          fill: currentColor;
+        }
+        .dark .react-flow__controls-button {
+          background: hsl(var(--background));
+          border-bottom: 1px solid hsl(var(--border));
+          fill: hsl(var(--foreground));
+        }
+        .dark .react-flow__controls-button:hover {
+          background: hsl(var(--muted));
+        }
+        /* MiniMap styling for dark mode */
+        .dark .react-flow__minimap {
+          background: hsl(var(--background));
+        }
+        .dark .react-flow__minimap-mask {
+          fill: hsl(var(--background));
+          opacity: 0.8;
+        }
       `}</style>
       <ReactFlow
         nodes={nodes}

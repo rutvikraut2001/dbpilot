@@ -17,7 +17,18 @@ export class MongoDBAdapter extends BaseAdapter {
 
   async connect(): Promise<void> {
     try {
-      this.client = new MongoClient(this.connectionString);
+      this.client = new MongoClient(this.connectionString, {
+        // Production-ready connection pool settings
+        maxPoolSize: 20, // Max connections for high traffic
+        minPoolSize: 2, // Keep minimum connections ready
+        maxIdleTimeMS: 30000, // Close idle connections after 30s
+        serverSelectionTimeoutMS: 10000, // Server selection timeout
+        socketTimeoutMS: 30000, // Socket timeout for operations
+        // Keep connections alive
+        heartbeatFrequencyMS: 10000,
+        // Compression for large data transfers
+        compressors: ["zlib"],
+      });
       await this.client.connect();
 
       // Extract database name from connection string or use default
@@ -66,6 +77,20 @@ export class MongoDBAdapter extends BaseAdapter {
         success: false,
         message: error instanceof Error ? error.message : 'Connection failed',
       };
+    }
+  }
+
+  /**
+   * Lightweight health check using existing connection (no new connections).
+   * Use this for reconnect checks instead of testConnection.
+   */
+  async ping(): Promise<boolean> {
+    if (!this.client || !this.db) return false;
+    try {
+      await this.db.command({ ping: 1 });
+      return true;
+    } catch {
+      return false;
     }
   }
 

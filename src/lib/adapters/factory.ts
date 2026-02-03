@@ -4,6 +4,7 @@ import { DatabaseAdapter, DatabaseType } from './types';
 import { PostgresAdapter } from './postgres';
 import { MongoDBAdapter } from './mongodb';
 import { ClickHouseAdapter } from './clickhouse';
+import { schemaCache } from '../cache';
 
 // Adapter cache to reuse connections
 const adapterCache = new Map<string, DatabaseAdapter>();
@@ -40,6 +41,8 @@ export async function removeAdapter(id: string): Promise<void> {
   if (adapter) {
     await adapter.disconnect();
     adapterCache.delete(id);
+    // Clear cached schema data for this connection
+    schemaCache.clearConnection(id);
   }
 }
 
@@ -49,4 +52,6 @@ export async function clearAllAdapters(): Promise<void> {
   );
   await Promise.all(disconnectPromises);
   adapterCache.clear();
+  // Clear all cached schema data
+  schemaCache.clear();
 }

@@ -95,6 +95,8 @@ export interface DatabaseAdapter {
   disconnect(): Promise<void>;
   testConnection(): Promise<{ success: boolean; message: string }>;
   isConnected(): boolean;
+  // Lightweight health check using existing connection (no new connections)
+  ping(): Promise<boolean>;
 
   // Schema operations
   getTables(): Promise<TableInfo[]>;
@@ -132,6 +134,7 @@ export abstract class BaseAdapter implements DatabaseAdapter {
   abstract connect(): Promise<void>;
   abstract disconnect(): Promise<void>;
   abstract testConnection(): Promise<{ success: boolean; message: string }>;
+  abstract ping(): Promise<boolean>;
 
   isConnected(): boolean {
     return this.connected;

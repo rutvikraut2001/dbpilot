@@ -18,9 +18,19 @@ export class PostgresAdapter extends BaseAdapter {
     try {
       this.pool = new Pool({
         connectionString: this.connectionString,
-        max: 5,
-        idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 10000,
+        // Production-ready pool settings
+        max: 20, // Max connections for high traffic
+        min: 2, // Keep minimum connections ready
+        idleTimeoutMillis: 30000, // Close idle connections after 30s
+        connectionTimeoutMillis: 10000, // Connection timeout
+        // Keep connections alive
+        keepAlive: true,
+        keepAliveInitialDelayMillis: 10000,
+      });
+
+      // Set statement timeout for all queries (30 seconds max)
+      this.pool.on("connect", (client) => {
+        client.query("SET statement_timeout = '30000'");
       });
 
       // Test the connection
@@ -64,6 +74,22 @@ export class PostgresAdapter extends BaseAdapter {
         success: false,
         message: error instanceof Error ? error.message : "Connection failed",
       };
+    }
+  }
+
+  /**
+   * Lightweight health check using existing pool (no new connections).
+   * Use this for reconnect checks instead of testConnection.
+   */
+  async ping(): Promise<boolean> {
+    if (!this.pool) return false;
+    try {
+      const client = await this.pool.connect();
+      await client.query("SELECT 1");
+      client.release();
+      return true;
+    } catch {
+      return false;
     }
   }
 

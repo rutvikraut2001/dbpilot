@@ -16,6 +16,7 @@ import {
   Sun,
   Moon,
   Monitor,
+  Loader2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -42,12 +43,15 @@ import {
   useConnectionStore,
   useActiveConnection,
   useReadOnlyMode,
+  useHasHydrated,
 } from '@/lib/stores/connection';
 import { useStudioStore, TabType } from '@/lib/stores/studio';
+import { ConnectionConfig } from '@/lib/adapters/types';
 
 export default function StudioPage() {
   const router = useRouter();
   const { setTheme } = useTheme();
+  const hasHydrated = useHasHydrated();
   const activeConnection = useActiveConnection();
   const readOnlyMode = useReadOnlyMode();
   const { setActiveConnection, toggleReadOnlyMode } = useConnectionStore();
@@ -58,6 +62,11 @@ export default function StudioPage() {
     setSidebarOpen,
     reset,
   } = useStudioStore();
+
+  // Reconnection state
+  const [isReconnecting, setIsReconnecting] = useState(false);
+  const [reconnectFailed, setReconnectFailed] = useState(false);
+  const reconnectAttempted = useRef(false);
 
   // Sidebar resize state
   const [sidebarWidth, setSidebarWidth] = useState(280);
@@ -97,12 +106,61 @@ export default function StudioPage() {
     };
   }, [isResizing, resize, stopResizing]);
 
+  // Auto-reconnect on page load if we have a saved connection
   useEffect(() => {
-    // Redirect to home if no active connection
-    if (!activeConnection) {
+    // Wait for Zustand to hydrate from localStorage before deciding
+    if (!hasHydrated) return;
+
+    const checkAndReconnect = async (connection: ConnectionConfig) => {
+      setIsReconnecting(true);
+      setReconnectFailed(false);
+
+      try {
+        // First, check if connection already exists and is healthy
+        const healthResponse = await fetch(
+          `/api/connect?connectionId=${connection.id}`
+        );
+        const healthData = await healthResponse.json();
+
+        if (healthData.exists && healthData.healthy) {
+          // Connection is still alive, no need to reconnect
+          setIsReconnecting(false);
+          return;
+        }
+
+        // Connection doesn't exist or is unhealthy, reconnect
+        const response = await fetch('/api/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(connection),
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to reconnect');
+        }
+
+        // Connection restored successfully
+        setIsReconnecting(false);
+      } catch (error) {
+        console.error('Reconnect error:', error);
+        setIsReconnecting(false);
+        setReconnectFailed(true);
+        // Clear the active connection since reconnect failed
+        setActiveConnection(null);
+      }
+    };
+
+    // Only attempt reconnect once per page load
+    if (reconnectAttempted.current) return;
+
+    if (activeConnection) {
+      reconnectAttempted.current = true;
+      checkAndReconnect(activeConnection);
+    } else {
+      // Redirect to home if no active connection
       router.push('/');
     }
-  }, [activeConnection, router]);
+  }, [hasHydrated, activeConnection, router, setActiveConnection]);
 
   const handleDisconnect = async () => {
     if (!activeConnection) return;
@@ -120,10 +178,30 @@ export default function StudioPage() {
     router.push('/');
   };
 
-  if (!activeConnection) {
+  // Show loading while waiting for hydration
+  if (!hasHydrated) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen gap-3">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="text-muted-foreground">Loading...</p>
+      </div>
+    );
+  }
+
+  // Redirect if no connection after hydration
+  if (!activeConnection || reconnectFailed) {
     return (
       <div className="flex items-center justify-center h-screen">
         <p className="text-muted-foreground">Redirecting...</p>
+      </div>
+    );
+  }
+
+  if (isReconnecting) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen gap-3">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="text-muted-foreground">Reconnecting to {activeConnection.name}...</p>
       </div>
     );
   }

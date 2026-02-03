@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Database, Loader2, Trash2, CheckCircle2, XCircle } from 'lucide-react';
+import { Database, Loader2, Trash2, CheckCircle2, XCircle, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -14,19 +14,31 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useConnectionStore } from '@/lib/stores/connection';
 import { supportedDatabases } from '@/lib/constants';
-import { DatabaseType } from '@/lib/adapters/types';
+import { DatabaseType, ConnectionConfig } from '@/lib/adapters/types';
 
 export function ConnectionForm() {
   const router = useRouter();
-  const { connections, addConnection, removeConnection, setActiveConnection } = useConnectionStore();
+  const { connections, addConnection, removeConnection, updateConnection, setActiveConnection } = useConnectionStore();
 
   const [dbType, setDbType] = useState<DatabaseType>('postgresql');
   const [connectionString, setConnectionString] = useState('');
   const [connectionName, setConnectionName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  // Edit connection state
+  const [editingConnection, setEditingConnection] = useState<ConnectionConfig | null>(null);
+  const [editedName, setEditedName] = useState('');
 
   const selectedDb = supportedDatabases.find((db) => db.type === dbType);
 
@@ -141,6 +153,25 @@ export function ConnectionForm() {
     removeConnection(id);
   };
 
+  const handleEditConnection = (conn: ConnectionConfig, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingConnection(conn);
+    setEditedName(conn.name);
+  };
+
+  const handleSaveEdit = () => {
+    if (editingConnection && editedName.trim()) {
+      updateConnection(editingConnection.id, { name: editedName.trim() });
+      setEditingConnection(null);
+      setEditedName('');
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditingConnection(null);
+    setEditedName('');
+  };
+
   return (
     <div className="space-y-6">
       {/* Saved Connections */}
@@ -163,18 +194,29 @@ export function ConnectionForm() {
                     <div>
                       <p className="font-medium">{conn.name}</p>
                       <p className="text-sm text-muted-foreground">
-                        {conn.type === 'postgresql' ? 'PostgreSQL' : 'MongoDB'}
+                        {conn.type === 'postgresql' ? 'PostgreSQL' :
+                         conn.type === 'mongodb' ? 'MongoDB' : 'ClickHouse'}
                       </p>
                     </div>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={(e) => handleDeleteConnection(conn.id, e)}
-                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={(e) => handleEditConnection(conn, e)}
+                      className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={(e) => handleDeleteConnection(conn.id, e)}
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -265,6 +307,49 @@ export function ConnectionForm() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Edit Connection Dialog */}
+      <Dialog open={!!editingConnection} onOpenChange={(open) => !open && handleCancelEdit()}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Connection</DialogTitle>
+            <DialogDescription>
+              Update the name for this connection.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit-name">Connection Name</Label>
+              <Input
+                id="edit-name"
+                value={editedName}
+                onChange={(e) => setEditedName(e.target.value)}
+                placeholder="My Database"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && editedName.trim()) {
+                    handleSaveEdit();
+                  }
+                }}
+              />
+            </div>
+            {editingConnection && (
+              <div className="text-sm text-muted-foreground">
+                <span className="font-medium">Type:</span>{' '}
+                {editingConnection.type === 'postgresql' ? 'PostgreSQL' :
+                 editingConnection.type === 'mongodb' ? 'MongoDB' : 'ClickHouse'}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={handleCancelEdit}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveEdit} disabled={!editedName.trim()}>
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

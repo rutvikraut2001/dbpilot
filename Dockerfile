@@ -15,7 +15,7 @@ COPY . .
 
 # Build the application with memory limit to prevent crashes
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV NODE_OPTIONS="--max-old-space-size=1024"
+ENV NODE_OPTIONS="--max-old-space-size=4096"
 RUN npm run build
 
 # Stage 3: Runner

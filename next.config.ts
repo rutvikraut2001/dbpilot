@@ -8,17 +8,6 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.resolve(__dirname),
   },
-  webpack: (config, { isServer }) => {
-    // Monaco Editor webpack configuration
-    if (!isServer) {
-      config.resolve.fallback = {
-        ...config.resolve.fallback,
-        fs: false,
-        path: false,
-      };
-    }
-    return config;
-  },
 };
 
 export default nextConfig;

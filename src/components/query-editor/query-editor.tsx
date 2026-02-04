@@ -2,7 +2,7 @@
 
 import { useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import { Play, Plus, X, Clock, Download } from 'lucide-react';
+import { Play, Plus, X, Clock, Download, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
@@ -18,9 +18,19 @@ import { Badge } from '@/components/ui/badge';
 import { useStudioStore } from '@/lib/stores/studio';
 import { useActiveConnection, useReadOnlyMode } from '@/lib/stores/connection';
 
-
-// Dynamically import Monaco to avoid SSR issues
-const Editor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
+// Dynamically import Monaco editor to avoid SSR issues
+const MonacoEditor = dynamic(
+  () => import('./monaco-editor').then((mod) => mod.MonacoEditor),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center h-full text-muted-foreground gap-2">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading editor...
+      </div>
+    ),
+  }
+);
 
 export function QueryEditor() {
   const activeConnection = useActiveConnection();
@@ -183,24 +193,10 @@ export function QueryEditor() {
 
       {/* Editor */}
       <div className="flex-1 min-h-[200px]">
-        <Editor
-          height="100%"
+        <MonacoEditor
           language={getLanguage()}
           value={activeTab?.query || ''}
           onChange={handleEditorChange}
-          theme="vs-dark"
-          options={{
-            minimap: { enabled: false },
-            fontSize: 14,
-            lineNumbers: 'on',
-            scrollBeyondLastLine: false,
-            wordWrap: 'on',
-            automaticLayout: true,
-            tabSize: 2,
-            quickSuggestions: true,
-            suggestOnTriggerCharacters: true,
-          }}
-          loading={<div className="flex items-center justify-center h-full text-muted-foreground">Loading editor...</div>}
         />
       </div>
 

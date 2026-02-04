@@ -1,6 +1,16 @@
 {
   "name": "db-studio",
   "version": "0.1.0",
+  "description": "A modern, open-source database studio for developers. Explore schemas, browse data, and run queries across PostgreSQL, MongoDB, and ClickHouse.",
+  "author": {
+    "name": "Rutvik",
+    "url": "https://github.com/rutvikraut2001"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rutvikraut2001/dbpilot"
+  },
+  "license": "MIT",
   "private": true,
   "scripts": {
     "dev": "next dev",

@@ -12,7 +12,7 @@ A modern, open-source database studio for developers. Explore schemas, browse da
 
 ```bash
 # Clone and run with Docker
-git clone https://github.com/yourusername/db-studio.git
+git clone https://github.com/rutvikraut2001/dbpilot.git
 cd db-studio
 docker compose up -d
 ```
@@ -31,7 +31,7 @@ Then connect to:
 ### Option 2: Local Development
 
 ```bash
-git clone https://github.com/yourusername/db-studio.git
+git clone https://github.com/rutvikraut2001/dbpilot.git
 cd db-studio
 npm install
 npm run dev
@@ -91,7 +91,7 @@ Write and execute queries with syntax highlighting and results view.
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/dbpilot.git
+   git clone https://github.com/rutvikraut2001/dbpilot.git
    cd dbpilot
    ```
 
@@ -159,23 +159,23 @@ After making changes to your code, here's how to update your Docker Hub image:
 
 **1. Rebuild the image:**
 ```bash
-docker build -t yourusername/db-studio:latest .
+docker build -t 30rutvik/db-studio:latest .
 ```
 
 **2. Push to Docker Hub:**
 ```bash
-docker push yourusername/db-studio:latest
+docker push 30rutvik/db-studio:latest
 ```
 
 **3. (Optional) Tag with version:**
 ```bash
-docker tag yourusername/db-studio:latest yourusername/db-studio:v1.1
-docker push yourusername/db-studio:v1.1
+docker tag 30rutvik/db-studio:latest 30rutvik/db-studio:v1.1
+docker push 30rutvik/db-studio:v1.1
 ```
 
 **For users pulling your updated image:**
 ```bash
-docker pull yourusername/db-studio:latest
+docker pull 30rutvik/db-studio:latest
 docker compose down
 docker compose up -d
 ```
@@ -219,6 +219,18 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
+## Author
+
+**Rutvik** - Creator & Maintainer
+
+- GitHub: [@rutvikraut2001](https://github.com/rutvikraut2001)
+- Docker Hub: [30rutvik/db-studio](https://hub.docker.com/r/30rutvik/db-studio)
+
+---
+
 <p align="center">
-  Made with ❤️ by developer, for developers
+  Made with ❤️ by <a href="https://github.com/rutvikraut2001">Rutvik</a>
+</p>
+<p align="center">
+  © 2025 DB Studio. MIT License.
 </p>

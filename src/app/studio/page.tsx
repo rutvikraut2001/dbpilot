@@ -22,7 +22,6 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
 import {
   Tooltip,
   TooltipContent,
@@ -39,6 +38,7 @@ import { TableBrowser } from '@/components/sidebar/table-browser';
 import { DataViewer } from '@/components/data-table/data-viewer';
 import { QueryEditor } from '@/components/query-editor/query-editor';
 import { SchemaViewer } from '@/components/schema-viewer/schema-viewer';
+import { DatabaseSwitcher } from '@/components/connection/database-switcher';
 import {
   useConnectionStore,
   useActiveConnection,
@@ -135,14 +135,20 @@ export default function StudioPage() {
           return;
         }
 
-        // Connection doesn't exist or is unhealthy, reconnect
+        // Connection doesn't exist or is unhealthy, reconnect.
+        // Must send `connectionId` (not `id`) — that's the field the API reads to cache the adapter.
         const response = await fetch('/api/connect', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(connection),
+          body: JSON.stringify({
+            type: connection.type,
+            connectionString: connection.connectionString,
+            connectionId: connection.id,
+          }),
         });
 
-        if (!response.ok) {
+        const reconnectData = await response.json().catch(() => ({}));
+        if (!response.ok || !reconnectData.success) {
           throw new Error('Failed to reconnect');
         }
 
@@ -223,14 +229,7 @@ export default function StudioPage() {
             <span className="font-semibold">DB Studio</span>
           </div>
           <span className="text-muted-foreground">/</span>
-          <div className="flex items-center gap-2">
-            <span className="font-medium">{activeConnection.name}</span>
-            <Badge variant="secondary" className="text-xs">
-              {activeConnection.type === 'postgresql' ? 'PostgreSQL' :
-                activeConnection.type === 'mongodb' ? 'MongoDB' :
-                activeConnection.type === 'clickhouse' ? 'ClickHouse' : 'Redis'}
-            </Badge>
-          </div>
+          <DatabaseSwitcher activeConnection={activeConnection} />
         </div>
 
         <div className="flex items-center gap-4">
@@ -294,8 +293,10 @@ export default function StudioPage() {
         </div>
       </header>
 
-      {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden">
+      {/* Main Content — keyed by connection ID so React force-remounts all
+          child components (TableBrowser, DataViewer, etc.) when switching DBs,
+          guaranteeing fresh useEffect fetches with the correct connection. */}
+      <div key={activeConnection.id} className="flex-1 flex overflow-hidden">
         {/* Sidebar - resizable */}
         {sidebarOpen && (
           <div

@@ -233,12 +233,10 @@ export default function Home() {
                           Use <code className="bg-muted px-1 rounded">host.docker.internal</code> instead of <code className="bg-muted px-1 rounded">localhost</code>
                         </p>
                         <div className="space-y-1 text-xs">
-                          <code className="block bg-muted p-2 rounded">
-                            postgresql://user:pass@host.docker.internal:5432/mydb
-                          </code>
-                          <code className="block bg-muted p-2 rounded">
-                            mongodb://user:pass@host.docker.internal:27017/mydb
-                          </code>
+                          <code className="block bg-muted p-2 rounded">postgresql://user:pass@host.docker.internal:5432/mydb</code>
+                          <code className="block bg-muted p-2 rounded">mongodb://user:pass@host.docker.internal:27017/mydb</code>
+                          <code className="block bg-muted p-2 rounded">clickhouse://user:pass@host.docker.internal:8123/default</code>
+                          <code className="block bg-muted p-2 rounded">redis://host.docker.internal:6379/0</code>
                         </div>
                       </div>
                       <div>
@@ -250,12 +248,10 @@ export default function Home() {
                         </code>
                         <p className="text-xs text-muted-foreground mb-1">Then connect using:</p>
                         <div className="space-y-1 text-xs">
-                          <code className="block bg-muted p-2 rounded">
-                            postgresql://postgres:postgres@postgres:5432/testdb
-                          </code>
-                          <code className="block bg-muted p-2 rounded">
-                            mongodb://mongo:mongo@mongodb:27017
-                          </code>
+                          <code className="block bg-muted p-2 rounded">postgresql://postgres:postgres@postgres:5432/testdb</code>
+                          <code className="block bg-muted p-2 rounded">mongodb://mongo:mongo@mongodb:27017</code>
+                          <code className="block bg-muted p-2 rounded">clickhouse://default:clickhouse@clickhouse:8123/default</code>
+                          <code className="block bg-muted p-2 rounded">redis://redis:6379/0</code>
                         </div>
                       </div>
                     </div>
@@ -267,73 +263,76 @@ export default function Home() {
         </div>
 
         {/* Features */}
-        <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl mx-auto">
-          <div className="text-center p-6">
-            <div className="w-12 h-12 bg-blue-500/10 rounded-lg flex items-center justify-center mx-auto mb-4">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6 text-blue-500"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"
-                />
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 max-w-4xl mx-auto">
+          <div className="text-center p-5">
+            <div className="w-11 h-11 bg-blue-500/10 rounded-lg flex items-center justify-center mx-auto mb-3">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
               </svg>
             </div>
-            <h3 className="font-semibold mb-2">Multi-Database Support</h3>
-            <p className="text-sm text-muted-foreground">
-              Connect to PostgreSQL, MongoDB, ClickHouse or Redis with a unified interface.
+            <h3 className="font-semibold mb-1 text-sm">4 Databases</h3>
+            <p className="text-xs text-muted-foreground">
+              PostgreSQL, MongoDB, ClickHouse &amp; Redis — one unified interface.
             </p>
           </div>
 
-          <div className="text-center p-6">
-            <div className="w-12 h-12 bg-green-500/10 rounded-lg flex items-center justify-center mx-auto mb-4">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6 text-green-500"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                />
+          <div className="text-center p-5">
+            <div className="w-11 h-11 bg-green-500/10 rounded-lg flex items-center justify-center mx-auto mb-3">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
             </div>
-            <h3 className="font-semibold mb-2">Schema Visualization</h3>
-            <p className="text-sm text-muted-foreground">
-              View ER diagrams and explore table relationships visually.
+            <h3 className="font-semibold mb-1 text-sm">Schema Visualizer</h3>
+            <p className="text-xs text-muted-foreground">
+              Interactive ER diagrams with PK/FK relationships for relational &amp; document DBs.
             </p>
           </div>
 
-          <div className="text-center p-6">
-            <div className="w-12 h-12 bg-purple-500/10 rounded-lg flex items-center justify-center mx-auto mb-4">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6 text-purple-500"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-                />
+          <div className="text-center p-5">
+            <div className="w-11 h-11 bg-orange-500/10 rounded-lg flex items-center justify-center mx-auto mb-3">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
             </div>
-            <h3 className="font-semibold mb-2">Read-Only Mode</h3>
-            <p className="text-sm text-muted-foreground">
-              Safely browse production databases with write protection enabled.
+            <h3 className="font-semibold mb-1 text-sm">Query Editor</h3>
+            <p className="text-xs text-muted-foreground">
+              Monaco-powered editor for SQL, MongoDB queries, and Redis commands.
+            </p>
+          </div>
+
+          <div className="text-center p-5">
+            <div className="w-11 h-11 bg-red-500/10 rounded-lg flex items-center justify-center mx-auto mb-3">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+              </svg>
+            </div>
+            <h3 className="font-semibold mb-1 text-sm">Redis Cache Browser</h3>
+            <p className="text-xs text-muted-foreground">
+              Browse keys by pattern, view TTL, type &amp; memory. Flush DB or All with one click.
+            </p>
+          </div>
+
+          <div className="text-center p-5">
+            <div className="w-11 h-11 bg-violet-500/10 rounded-lg flex items-center justify-center mx-auto mb-3">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-violet-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+              </svg>
+            </div>
+            <h3 className="font-semibold mb-1 text-sm">Multi-DB Switcher</h3>
+            <p className="text-xs text-muted-foreground">
+              Switch between saved connections instantly from the header — no disconnect needed.
+            </p>
+          </div>
+
+          <div className="text-center p-5">
+            <div className="w-11 h-11 bg-purple-500/10 rounded-lg flex items-center justify-center mx-auto mb-3">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+            </div>
+            <h3 className="font-semibold mb-1 text-sm">Read-Only Mode</h3>
+            <p className="text-xs text-muted-foreground">
+              Server-side write protection to safely browse production databases.
             </p>
           </div>
         </div>

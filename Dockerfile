@@ -1,42 +1,51 @@
-# Stage 1: Dependencies
+# syntax=docker/dockerfile:1
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 1: Install dependencies
+# ─────────────────────────────────────────────────────────────────────────────
 FROM node:20-alpine AS deps
 WORKDIR /app
 
-# Install dependencies based on the preferred package manager
 COPY package.json package-lock.json* ./
-RUN npm ci --legacy-peer-deps
+# Use npm cache mount so repeated builds reuse downloaded packages
+RUN --mount=type=cache,id=npm-cache,target=/root/.npm \
+    npm ci --legacy-peer-deps
 
-# Stage 2: Builder
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2: Build the application
+# ─────────────────────────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
 WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Build the application with memory limit to prevent crashes
 ENV NEXT_TELEMETRY_DISABLED=1
+# Increase heap for large dependency graphs during compilation
 ENV NODE_OPTIONS="--max-old-space-size=4096"
+
 RUN npm run build
 
-# Stage 3: Runner
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 3: Production runtime — only the standalone output
+# ─────────────────────────────────────────────────────────────────────────────
 FROM node:20-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+# Create non-root user in a single layer
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser  --system --uid 1001 nextjs
 
-# Copy built assets
-COPY --from=builder /app/public ./public
+# Copy only what the production server needs
+COPY --from=builder --chown=nextjs:nodejs /app/public          ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static    ./.next/static
 
 USER nextjs
 
 EXPOSE 3030
-
 ENV PORT=3030
 ENV HOSTNAME="0.0.0.0"
 

@@ -1,7 +1,7 @@
 {
   "name": "db-studio",
   "version": "0.1.0",
-  "description": "A modern, open-source database studio for developers. Explore schemas, browse data, and run queries across PostgreSQL, MongoDB, and ClickHouse.",
+  "description": "A modern, open-source database studio for developers. Explore schemas, browse data, and run queries across PostgreSQL, MongoDB, ClickHouse, and Redis.",
   "author": {
     "name": "Rutvik",
     "url": "https://github.com/rutvikraut2001"

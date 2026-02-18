@@ -22,29 +22,54 @@ export class RedisAdapter extends BaseAdapter {
     supportsTransactions: false,
   };
 
+  /**
+   * Parse a Redis connection URL into ioredis options.
+   *
+   * Credential rules:
+   *  - password present  → pass password (+ username if also present) for AUTH
+   *  - username only, no password → skip AUTH entirely (e.g. `redis://default@host`)
+   *  - neither → no AUTH (open server)
+   *
+   * This prevents ioredis from sending `AUTH default ""` for passwordless
+   * servers, which would otherwise cause a connection failure.
+   */
+  private parseConnectionOptions(connectionString: string): {
+    host: string;
+    port: number;
+    username?: string;
+    password?: string;
+    db: number;
+  } {
+    const url = new URL(connectionString);
+    const dbPath = url.pathname.slice(1);
+    const db = dbPath ? parseInt(dbPath, 10) : 0;
+
+    const hasPassword = url.password.length > 0;
+    const hasUsername = url.username.length > 0;
+
+    return {
+      host: url.hostname || "localhost",
+      port: parseInt(url.port || "6379", 10),
+      // Only send ACL username when a password accompanies it
+      username: hasPassword && hasUsername ? url.username : undefined,
+      password: hasPassword ? decodeURIComponent(url.password) : undefined,
+      db: isNaN(db) || db < 0 || db > 15 ? 0 : db,
+    };
+  }
+
   async connect(): Promise<void> {
     try {
-      const parsedUrl = new URL(this.connectionString);
-      const pathname = parsedUrl.pathname.slice(1);
-      this.currentDb = pathname ? parseInt(pathname, 10) : 0;
-
-      if (this.currentDb < 0 || this.currentDb > 15) {
-        throw new Error("Redis database must be between 0 and 15");
-      }
+      const opts = this.parseConnectionOptions(this.connectionString);
+      this.currentDb = opts.db;
 
       this.client = new Redis({
-        host: parsedUrl.hostname || "localhost",
-        port: parseInt(parsedUrl.port || "6379", 10),
-        username: parsedUrl.username || undefined,
-        password: parsedUrl.password
-          ? decodeURIComponent(parsedUrl.password)
-          : undefined,
-        db: this.currentDb,
+        ...opts,
         maxRetriesPerRequest: 3,
         retryStrategy: (times) => {
           if (times > 3) return null;
-          return Math.min(times * 50, 2000);
+          return Math.min(times * 100, 2000);
         },
+        enableOfflineQueue: false,
         connectionName: "db-studio",
         lazyConnect: false,
         enableReadyCheck: true,
@@ -74,18 +99,13 @@ export class RedisAdapter extends BaseAdapter {
   async testConnection(): Promise<{ success: boolean; message: string }> {
     let testClient: Redis | null = null;
     try {
-      const parsedUrl = new URL(this.connectionString);
-      const db = parsedUrl.pathname.slice(1);
-      const dbNum = db ? parseInt(db, 10) : 0;
+      const opts = this.parseConnectionOptions(this.connectionString);
 
       testClient = new Redis({
-        host: parsedUrl.hostname || "localhost",
-        port: parseInt(parsedUrl.port || "6379", 10),
-        username: parsedUrl.username || undefined,
-        password: parsedUrl.password
-          ? decodeURIComponent(parsedUrl.password)
-          : undefined,
-        db: dbNum,
+        ...opts,
+        maxRetriesPerRequest: 1,
+        retryStrategy: () => null, // fail immediately, no retries
+        enableOfflineQueue: false,
         connectTimeout: 5000,
         lazyConnect: false,
       });
@@ -98,7 +118,7 @@ export class RedisAdapter extends BaseAdapter {
 
       return {
         success: true,
-        message: `Connected successfully. Redis ${version} (DB ${dbNum})`,
+        message: `Connected successfully. Redis ${version} (DB ${opts.db})`,
       };
     } catch (error) {
       if (testClient) {
@@ -817,7 +837,7 @@ export class RedisAdapter extends BaseAdapter {
         if (sampledForMemory < 20) {
           for (const key of keys.slice(0, 20 - sampledForMemory)) {
             try {
-              const mem = (await client.memory("USAGE", key)) as number | null;
+              const mem = (await client.call("MEMORY", "USAGE", key)) as number | null;
               if (mem) {
                 totalMemory += mem;
                 sampledForMemory++;

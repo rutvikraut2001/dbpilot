@@ -1,19 +1,20 @@
 # DBPilot
 
-A modern, open-source database studio for developers. Explore schemas, browse data, and run queries across multiple databases with a beautiful, intuitive interface.
+A modern, open-source database studio for developers. Explore schemas, browse data, and run queries across **PostgreSQL, MongoDB, ClickHouse, and Redis** with a beautiful, intuitive interface.
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)
 ![License](https://img.shields.io/badge/License-MIT-green)
+
+---
 
 ## Quick Start
 
 ### Option 1: Docker (Recommended)
 
 ```bash
-# Clone and run with Docker
 git clone https://github.com/rutvikraut2001/dbpilot.git
-cd db-studio
+cd dbpilot
 docker compose up -d
 ```
 
@@ -24,181 +25,220 @@ Open [http://localhost:3030](http://localhost:3030) in your browser.
 docker compose --profile with-db up -d
 ```
 
-Then connect to:
-- PostgreSQL: `postgresql://postgres:postgres@postgres:5432/testdb`
-- MongoDB: `mongodb://mongo:mongo@mongodb:27017`
+Then connect using:
+| Database | Connection String |
+|---|---|
+| PostgreSQL | `postgresql://postgres:postgres@postgres:5432/testdb` |
+| MongoDB | `mongodb://mongo:mongo@mongodb:27017` |
+| ClickHouse | `clickhouse://default:clickhouse@clickhouse:8123/default` |
+| Redis | `redis://redis:6379/0` |
 
 ### Option 2: Local Development
 
 ```bash
 git clone https://github.com/rutvikraut2001/dbpilot.git
-cd db-studio
+cd dbpilot
 npm install
 npm run dev
 ```
 
+Open [http://localhost:3000](http://localhost:3000).
+
+---
+
 ## Features
 
-- **Multi-Database Support** - Connect to PostgreSQL and MongoDB (more coming soon)
-- **Schema Visualization** - Interactive ER diagrams powered by React Flow
-- **Data Browser** - Browse, search, and paginate through your data
-- **Query Editor** - Monaco-powered SQL/NoSQL editor with syntax highlighting
-- **Dark/Light Theme** - Beautiful UI that adapts to your preference
-- **Read-Only Mode** - Production-safe mode to prevent accidental writes
-- **Connection Management** - Save and manage multiple database connections
-- **Resizable Sidebar** - Adjust sidebar width to your preference
-- **Docker Support** - Easy deployment with Docker and docker-compose
+### Multi-Database Support
+| Database | Browse Data | Run Queries | Schema / ER Diagram | Notes |
+|---|---|---|---|---|
+| **PostgreSQL** | ✅ | ✅ SQL | ✅ | Full CRUD, column types, FK relationships |
+| **MongoDB** | ✅ | ✅ MQL | ✅ | Document browser, nested field inference |
+| **ClickHouse** | ✅ | ✅ SQL | ✅ | Columnar analytics, append-only write model |
+| **Redis** | ✅ | ✅ Commands | — | Key browser by pattern, TTL, type badges, flush |
 
-## Screenshots
+### General Features
+- **Multi-DB Switcher** — toggle between saved connections from the header without disconnecting
+- **Schema Visualization** — interactive ER diagrams with PK/FK relationships (PostgreSQL, MongoDB, ClickHouse)
+- **Query Editor** — Monaco-powered editor with syntax highlighting for SQL, MQL, and Redis commands
+- **Redis Cache Browser** — scan keys by pattern, view type-colored badges (string/hash/list/set/zset/stream), TTL countdown, memory usage per key
+- **Flush Operations** — Flush DB or Flush All directly from the Redis sidebar/toolbar (with confirmation)
+- **Inline Data Editing** — double-click any cell to edit values in-place
+- **Read-Only Mode** — server-side enforcement prevents accidental writes to production databases
+- **Connection Management** — save, rename, and switch between multiple database connections
+- **Resizable Sidebar** — drag to adjust the table/key browser width
+- **Dark / Light / System Theme** — adapts to your OS preference
+- **Docker Support** — optimised multi-stage image (~90–100 MB)
 
-<details>
-<summary>View Screenshots</summary>
+---
 
-### Connection Page
-Connect to your databases with a simple, intuitive interface.
+## Connection Strings
 
-### Data Browser
-Browse tables and collections with pagination, search, and filtering.
+### PostgreSQL
+```
+postgresql://user:password@host:5432/database
+postgresql://postgres:mypass@localhost:5432/mydb
+postgresql://user:pass@db.example.com:5432/prod?schema=public
+```
 
-### Schema Viewer
-Visualize your database schema with interactive ER diagrams.
+### MongoDB
+```
+mongodb://localhost:27017/mydb
+mongodb://user:pass@localhost:27017/mydb?authSource=admin
+mongodb+srv://user:pass@cluster.mongodb.net/mydb
+```
 
-### Query Editor
-Write and execute queries with syntax highlighting and results view.
+### ClickHouse
+```
+clickhouse://default:password@localhost:8123/default
+clickhouse://user:pass@clickhouse.example.com:8123/analytics
+```
 
-</details>
+### Redis
+```
+redis://localhost:6379/0
+redis://user:pass@redis.example.com:6379/0
+redis://:password@localhost:6379/2
+```
+
+---
 
 ## Tech Stack
 
-- **Framework**: [Next.js 16](https://nextjs.org/) (App Router)
-- **Language**: [TypeScript](https://www.typescriptlang.org/)
-- **Styling**: [Tailwind CSS](https://tailwindcss.com/)
-- **UI Components**: [shadcn/ui](https://ui.shadcn.com/)
-- **State Management**: [Zustand](https://zustand-demo.pmnd.rs/)
-- **Schema Visualization**: [React Flow](https://reactflow.dev/)
-- **Query Editor**: [Monaco Editor](https://microsoft.github.io/monaco-editor/)
-- **Database Drivers**: [node-postgres](https://node-postgres.com/), [MongoDB Node Driver](https://www.mongodb.com/docs/drivers/node/current/)
+| Category | Technology |
+|---|---|
+| Framework | [Next.js 16](https://nextjs.org/) (App Router) |
+| Language | [TypeScript 5](https://www.typescriptlang.org/) |
+| Styling | [Tailwind CSS 4](https://tailwindcss.com/) |
+| UI Components | [shadcn/ui](https://ui.shadcn.com/) + [Radix UI](https://radix-ui.com/) |
+| State Management | [Zustand](https://zustand-demo.pmnd.rs/) |
+| Schema Visualization | [React Flow / XY Flow](https://reactflow.dev/) |
+| Query Editor | [Monaco Editor](https://microsoft.github.io/monaco-editor/) |
+| Data Table | [TanStack Table v8](https://tanstack.com/table) |
+| PostgreSQL | [node-postgres (pg)](https://node-postgres.com/) |
+| MongoDB | [MongoDB Node Driver](https://www.mongodb.com/docs/drivers/node/current/) |
+| ClickHouse | [@clickhouse/client](https://github.com/ClickHouse/clickhouse-js) |
+| Redis | [ioredis](https://github.com/redis/ioredis) |
 
-## Getting Started
+---
+
+## Getting Started (Local)
 
 ### Prerequisites
-
-- Node.js 18+
-- npm, yarn, or pnpm
-- PostgreSQL and/or MongoDB instance to connect to
+- Node.js 20+
+- npm
+- A running instance of any supported database to connect to
 
 ### Installation
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/rutvikraut2001/dbpilot.git
-   cd dbpilot
-   ```
+```bash
+# 1. Clone
+git clone https://github.com/rutvikraut2001/dbpilot.git
+cd dbpilot
 
-2. **Install dependencies**
-   ```bash
-   npm install
-   ```
+# 2. Install dependencies
+npm install
 
-3. **Run the development server**
-   ```bash
-   npm run dev
-   ```
+# 3. Start development server
+npm run dev
+```
 
-4. **Open your browser**
-
-   Navigate to [http://localhost:3000](http://localhost:3000)
+Navigate to [http://localhost:3000](http://localhost:3000).
 
 ### Production Build
-
 ```bash
 npm run build
 npm start
 ```
 
+---
 
-## Usage
+## Docker
 
-### Connecting to a Database
-
-1. Open the application in your browser
-2. Select your database type (PostgreSQL or MongoDB)
-3. Enter a connection name (for your reference)
-4. Enter the connection string:
-   - **PostgreSQL**: `postgresql://user:password@host:port/database`
-   - **MongoDB**: `mongodb://user:password@host:port/database`
-5. Click "Connect"
-
-### Connection String Examples
-
-**PostgreSQL**
-```
-postgresql://postgres:password@localhost:5432/mydb
-postgresql://user:pass@localhost:5432/mydb?schema=public
-```
-
-**MongoDB**
-```
-mongodb://localhost:27017/mydb
-mongodb://user:pass@localhost:27017/mydb?authSource=admin
-```
-
-### Features Guide
-
-| Feature | Description |
-|---------|-------------|
-| **Data Tab** | Browse table/collection data with pagination |
-| **Query Tab** | Write and execute raw SQL or MongoDB queries |
-| **Schema Tab** | Visualize database schema with ER diagrams |
-| **Read-Only Toggle** | Enable to prevent write operations |
-| **Theme Toggle** | Switch between light, dark, or system theme |
-
-## Updating Your Docker Image
-
-After making changes to your code, here's how to update your Docker Hub image:
-
-**1. Rebuild the image:**
+### Run with Docker Compose
 ```bash
-docker build -t 30rutvik/db-studio:latest .
-```
-
-**2. Push to Docker Hub:**
-```bash
-docker push 30rutvik/db-studio:latest
-```
-
-**3. (Optional) Tag with version:**
-```bash
-docker tag 30rutvik/db-studio:latest 30rutvik/db-studio:v1.1
-docker push 30rutvik/db-studio:v1.1
-```
-
-**For users pulling your updated image:**
-```bash
-docker pull 30rutvik/db-studio:latest
-docker compose down
+# Production only
 docker compose up -d
+
+# With test databases (PostgreSQL, MongoDB, ClickHouse, Redis)
+docker compose --profile with-db up -d
 ```
 
-The `:latest` tag will always point to your most recent push. Users need to explicitly pull the new image since Docker caches images locally.
+### Build the image manually
+```bash
+docker build -t db-studio .
+```
+
+The multi-stage Dockerfile produces a lean Alpine image (~90–100 MB) by:
+- Using `output: standalone` to bundle only traced server dependencies
+- Excluding build-time artifacts: TypeScript compiler, SWC compiler binaries, sharp/libvips image libraries
+- Force-including packages with dynamic exports: `@clickhouse/client`
+
+### Connect to databases on your host machine (Docker Desktop)
+Use `host.docker.internal` instead of `localhost`:
+```
+postgresql://user:pass@host.docker.internal:5432/mydb
+mongodb://user:pass@host.docker.internal:27017/mydb
+redis://host.docker.internal:6379/0
+clickhouse://user:pass@host.docker.internal:8123/default
+```
+
+### Updating your Docker Hub image
+```bash
+# Rebuild and push
+docker build -t 30rutvik/db-studio:latest .
+docker push 30rutvik/db-studio:latest
+
+# Tag a specific version
+docker tag 30rutvik/db-studio:latest 30rutvik/db-studio:v2.0
+docker push 30rutvik/db-studio:v2.0
+
+# Pull the updated image
+docker pull 30rutvik/db-studio:latest
+docker compose down && docker compose up -d
+```
+
+---
+
+## Features Guide
+
+| Feature | How to use |
+|---|---|
+| **Data Tab** | Click a table/key pattern in the sidebar to browse data. Supports pagination, sorting, and inline editing. |
+| **Query Tab** | Write and execute SQL (PostgreSQL/ClickHouse), MongoDB queries (JSON), or Redis commands. |
+| **Schema Tab** | Available for PostgreSQL, MongoDB, and ClickHouse. Shows interactive ER diagram. |
+| **Redis Cache** | Browse keys grouped by pattern (`user:*`), see type, TTL, memory. Flush individual DB or entire Redis instance. |
+| **Multi-DB Switcher** | Click the connection badge in the header to switch between saved databases instantly. |
+| **Read-Only Toggle** | Enable in the header to block all write operations (enforced server-side). |
+| **Theme Toggle** | Sun/moon icon in the header to switch light, dark, or system theme. |
+
+---
 
 ## Roadmap
 
-- [ ] MySQL support
+- [x] PostgreSQL support (full CRUD + schema ER)
+- [x] MongoDB support (full CRUD + schema inference)
+- [x] ClickHouse support (read + append writes)
+- [x] Redis support (cache browser, TTL, Flush DB/All, Redis commands)
+- [x] Multi-database switcher (switch connections without disconnecting)
+- [x] Monaco query editor
+- [x] Interactive ER diagram (React Flow)
+- [x] Read-only mode (server-side enforcement)
+- [x] Docker image (~90–100 MB)
+- [x] Connection management (save, rename, delete)
+- [ ] MySQL / MariaDB support
 - [ ] SQLite support
-- [ ] Oracle Database support
-- [ ] DynamoDB support
-- [ ] Query history
-- [ ] Export data (CSV, JSON)
-- [ ] Table structure editing
-- [ ] Index management
+- [ ] Export data to CSV / JSON
 - [ ] Saved queries
-- [ ] SSH tunneling
-- [x] Docker image
+- [ ] Query history persistence
+- [ ] SSH tunnel support
+- [ ] Index management UI
+- [ ] Table structure editing
+
+---
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome!
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
@@ -206,22 +246,26 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
+---
+
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License — see the [LICENSE](LICENSE) file for details.
+
+---
 
 ## Acknowledgments
 
-- [Prisma Studio](https://www.prisma.io/studio) - Inspiration for the project
-- [shadcn/ui](https://ui.shadcn.com/) - Beautiful UI components
-- [React Flow](https://reactflow.dev/) - Schema visualization
-- [Monaco Editor](https://microsoft.github.io/monaco-editor/) - Query editor
+- [Prisma Studio](https://www.prisma.io/studio) — Inspiration for the project
+- [shadcn/ui](https://ui.shadcn.com/) — Beautiful UI components
+- [React Flow](https://reactflow.dev/) — Schema visualization
+- [Monaco Editor](https://microsoft.github.io/monaco-editor/) — Query editor
 
 ---
 
 ## Author
 
-**Rutvik** - Creator & Maintainer
+**Rutvik** — Creator & Maintainer
 
 - GitHub: [@rutvikraut2001](https://github.com/rutvikraut2001)
 - Docker Hub: [30rutvik/db-studio](https://hub.docker.com/r/30rutvik/db-studio)
@@ -232,5 +276,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
   Made with ❤️ by <a href="https://github.com/rutvikraut2001">Rutvik</a>
 </p>
 <p align="center">
-  © 2025 DB Studio. MIT License.
+  © 2025 DBPilot. MIT License.
 </p>

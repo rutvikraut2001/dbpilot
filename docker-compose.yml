@@ -61,6 +61,15 @@ services:
     profiles:
       - with-db
 
+  # Optional: Redis for testing
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --save "" --appendonly no
+    profiles:
+      - with-db
+
 volumes:
   postgres_data:
   mongo_data:

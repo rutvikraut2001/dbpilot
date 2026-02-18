@@ -1,12 +1,47 @@
+# Build outputs — never needed in build context
 node_modules
 .next
+
+# Git history
 .git
 .gitignore
-*.md
-.env*
+.gitattributes
+
+# Docker files themselves
+Dockerfile
+Dockerfile.*
+docker-compose*.yml
+.dockerignore
+
+# Environment & secrets
+.env
+.env.*
+*.pem
+*.key
+
+# OS & editor artifacts
 .DS_Store
+Thumbs.db
+*.log
 npm-debug.log*
-.vercel
-coverage
+
+# IDE configs
 .idea
 .vscode
+*.swp
+*.swo
+
+# CI / tooling
+.github
+.husky
+.vercel
+.claude
+
+# Dev-only docs & config
+*.md
+coverage
+**/__tests__
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx

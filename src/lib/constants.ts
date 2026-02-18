@@ -18,4 +18,9 @@ export const supportedDatabases: { type: DatabaseType; name: string; placeholder
     name: 'ClickHouse',
     placeholder: 'clickhouse://default:password@localhost:8123/default',
   },
+  {
+    type: 'redis',
+    name: 'Redis',
+    placeholder: 'redis://user:password@localhost:6379/0',
+  },
 ];

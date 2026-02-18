@@ -76,6 +76,36 @@ function isMongoWriteQuery(query: string): boolean {
   return mongoWriteOps.some((op) => query.includes(`.${op}(`));
 }
 
+/**
+ * Check if a Redis command is a write operation.
+ */
+function isRedisWriteCommand(query: string): boolean {
+  const command = query.trim().split(/\s+/)[0]?.toUpperCase();
+  if (!command) return false;
+
+  const writeCommands = [
+    "SET", "SETNX", "SETEX", "PSETEX", "SETRANGE", "MSET", "MSETNX",
+    "GETSET", "GETDEL",
+    "DEL", "UNLINK",
+    "INCR", "DECR", "INCRBY", "DECRBY", "INCRBYFLOAT",
+    "APPEND",
+    "LPUSH", "RPUSH", "LPUSHX", "RPUSHX", "LPOP", "RPOP",
+    "LSET", "LTRIM", "LINSERT", "LREM",
+    "SADD", "SREM", "SPOP", "SMOVE", "SDIFFSTORE", "SINTERSTORE", "SUNIONSTORE",
+    "ZADD", "ZREM", "ZINCRBY", "ZPOPMIN", "ZPOPMAX",
+    "ZRANGESTORE", "ZDIFFSTORE", "ZINTERSTORE", "ZUNIONSTORE",
+    "HSET", "HSETNX", "HDEL", "HINCRBY", "HINCRBYFLOAT", "HMSET",
+    "EXPIRE", "EXPIREAT", "PEXPIRE", "PEXPIREAT", "PERSIST",
+    "RENAME", "RENAMENX",
+    "FLUSHDB", "FLUSHALL",
+    "XADD", "XDEL", "XTRIM",
+    "PFADD", "PFMERGE",
+    "RESTORE", "MIGRATE", "MOVE", "COPY",
+  ];
+
+  return writeCommands.includes(command);
+}
+
 // Execute a query
 export async function POST(request: NextRequest) {
   let connectionId: string | undefined;
@@ -106,7 +136,7 @@ export async function POST(request: NextRequest) {
 
     // SERVER-SIDE read-only check - cannot be bypassed by client
     if (isReadOnlyMode(connectionId!)) {
-      const isWrite = isWriteQuery(query) || isMongoWriteQuery(query);
+      const isWrite = isWriteQuery(query) || isMongoWriteQuery(query) || isRedisWriteCommand(query);
 
       if (isWrite) {
         audit("query.execute", {

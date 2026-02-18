@@ -63,6 +63,13 @@ export default function StudioPage() {
     reset,
   } = useStudioStore();
 
+  // If Redis connection and schema tab is active, redirect to data tab
+  useEffect(() => {
+    if (activeConnection?.type === 'redis' && activeTab === 'schema') {
+      setActiveTab('data');
+    }
+  }, [activeConnection, activeTab, setActiveTab]);
+
   // Reconnection state
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [reconnectFailed, setReconnectFailed] = useState(false);
@@ -219,7 +226,9 @@ export default function StudioPage() {
           <div className="flex items-center gap-2">
             <span className="font-medium">{activeConnection.name}</span>
             <Badge variant="secondary" className="text-xs">
-              {activeConnection.type === 'postgresql' ? 'PostgreSQL' : 'MongoDB'}
+              {activeConnection.type === 'postgresql' ? 'PostgreSQL' :
+                activeConnection.type === 'mongodb' ? 'MongoDB' :
+                activeConnection.type === 'clickhouse' ? 'ClickHouse' : 'Redis'}
             </Badge>
           </div>
         </div>
@@ -331,13 +340,15 @@ export default function StudioPage() {
                   <Code2 className="h-4 w-4 mr-2" />
                   Query
                 </TabsTrigger>
-                <TabsTrigger
-                  value="schema"
-                  className="px-4 h-9 data-[state=active]:bg-muted rounded-none border-b-2 border-transparent data-[state=active]:border-primary"
-                >
-                  <GitBranch className="h-4 w-4 mr-2" />
-                  Schema
-                </TabsTrigger>
+                {activeConnection.type !== 'redis' && (
+                  <TabsTrigger
+                    value="schema"
+                    className="px-4 h-9 data-[state=active]:bg-muted rounded-none border-b-2 border-transparent data-[state=active]:border-primary"
+                  >
+                    <GitBranch className="h-4 w-4 mr-2" />
+                    Schema
+                  </TabsTrigger>
+                )}
               </TabsList>
             </Tabs>
 

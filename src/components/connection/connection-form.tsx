@@ -195,7 +195,8 @@ export function ConnectionForm() {
                       <p className="font-medium">{conn.name}</p>
                       <p className="text-sm text-muted-foreground">
                         {conn.type === 'postgresql' ? 'PostgreSQL' :
-                         conn.type === 'mongodb' ? 'MongoDB' : 'ClickHouse'}
+                         conn.type === 'mongodb' ? 'MongoDB' :
+                         conn.type === 'clickhouse' ? 'ClickHouse' : 'Redis'}
                       </p>
                     </div>
                   </div>
@@ -228,7 +229,7 @@ export function ConnectionForm() {
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">New Connection</CardTitle>
-          <CardDescription>Connect to a PostgreSQL or MongoDB database</CardDescription>
+          <CardDescription>Connect to PostgreSQL, MongoDB, ClickHouse or Redis</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
@@ -336,7 +337,8 @@ export function ConnectionForm() {
               <div className="text-sm text-muted-foreground">
                 <span className="font-medium">Type:</span>{' '}
                 {editingConnection.type === 'postgresql' ? 'PostgreSQL' :
-                 editingConnection.type === 'mongodb' ? 'MongoDB' : 'ClickHouse'}
+                 editingConnection.type === 'mongodb' ? 'MongoDB' :
+                 editingConnection.type === 'clickhouse' ? 'ClickHouse' : 'Redis'}
               </div>
             )}
           </div>

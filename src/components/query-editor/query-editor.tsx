@@ -128,6 +128,9 @@ export function QueryEditor() {
     if (activeConnection?.type === 'mongodb') {
       return 'javascript';
     }
+    if (activeConnection?.type === 'redis') {
+      return 'plaintext';
+    }
     return 'sql';
   };
 

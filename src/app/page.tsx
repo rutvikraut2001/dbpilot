@@ -29,7 +29,7 @@ export default function Home() {
             <h1 className="text-4xl font-bold">DB Studio</h1>
           </div>
           <p className="text-lg text-muted-foreground max-w-md mx-auto">
-            Universal database analyzer for PostgreSQL, MongoDB & ClickHouse
+            Universal database analyzer for PostgreSQL, MongoDB, ClickHouse & Redis
           </p>
         </div>
 
@@ -58,9 +58,11 @@ export default function Home() {
                 <div className="space-y-6">
                   {/* Connection Strings */}
                   <Tabs defaultValue="postgresql" className="w-full">
-                    <TabsList className="grid w-full grid-cols-2">
+                    <TabsList className="grid w-full grid-cols-4">
                       <TabsTrigger value="postgresql">PostgreSQL</TabsTrigger>
                       <TabsTrigger value="mongodb">MongoDB</TabsTrigger>
+                      <TabsTrigger value="clickhouse">ClickHouse</TabsTrigger>
+                      <TabsTrigger value="redis">Redis</TabsTrigger>
                     </TabsList>
                     <TabsContent value="postgresql" className="space-y-3 mt-3">
                       <div>
@@ -110,6 +112,65 @@ export default function Home() {
                         </div>
                       </div>
                     </TabsContent>
+                    <TabsContent value="clickhouse" className="space-y-3 mt-3">
+                      <div>
+                        <p className="text-sm font-medium mb-2">
+                          Connection String Format:
+                        </p>
+                        <code className="block bg-muted p-3 rounded-md text-xs break-all">
+                          clickhouse://username:password@host:port/database
+                        </code>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium mb-2">Examples:</p>
+                        <div className="space-y-2 text-xs">
+                          <code className="block bg-muted p-2 rounded">
+                            clickhouse://default:password@localhost:8123/default
+                          </code>
+                          <code className="block bg-muted p-2 rounded">
+                            clickhouse://user:pass@clickhouse.example.com:8123/analytics
+                          </code>
+                        </div>
+                      </div>
+                    </TabsContent>
+                    <TabsContent value="redis" className="space-y-3 mt-3">
+                      <div>
+                        <p className="text-sm font-medium mb-2">
+                          Connection String Format:
+                        </p>
+                        <code className="block bg-muted p-3 rounded-md text-xs break-all">
+                          redis://username:password@host:port/db-number
+                        </code>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium mb-2">Examples:</p>
+                        <div className="space-y-2 text-xs">
+                          <code className="block bg-muted p-2 rounded">
+                            redis://localhost:6379/0
+                          </code>
+                          <code className="block bg-muted p-2 rounded">
+                            redis://user:pass@redis.example.com:6379/0
+                          </code>
+                          <code className="block bg-muted p-2 rounded">
+                            redis://:password@localhost:6379/2
+                          </code>
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium mb-2">Query Examples:</p>
+                        <div className="space-y-2 text-xs">
+                          <code className="block bg-muted p-2 rounded">
+                            GET mykey
+                          </code>
+                          <code className="block bg-muted p-2 rounded">
+                            HGETALL user:1001
+                          </code>
+                          <code className="block bg-muted p-2 rounded">
+                            KEYS user:*
+                          </code>
+                        </div>
+                      </div>
+                    </TabsContent>
                   </Tabs>
 
                   {/* How to Use */}
@@ -119,7 +180,7 @@ export default function Home() {
                       How to Use
                     </p>
                     <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
-                      <li>Select your database type (PostgreSQL or MongoDB)</li>
+                      <li>Select your database type (PostgreSQL, MongoDB, ClickHouse or Redis)</li>
                       <li>Enter a friendly name for your connection</li>
                       <li>Paste your connection string</li>
                       <li>Click &quot;Test Connection&quot; to verify</li>
@@ -139,8 +200,8 @@ export default function Home() {
                         with pagination, sorting, and export to CSV
                       </li>
                       <li>
-                        <strong>Query Tab:</strong> Write and execute SQL or
-                        MongoDB queries with syntax highlighting
+                        <strong>Query Tab:</strong> Write and execute SQL,
+                        MongoDB, or Redis commands with syntax highlighting
                       </li>
                       <li>
                         <strong>Schema Tab:</strong> Visualize database schema
@@ -226,7 +287,7 @@ export default function Home() {
             </div>
             <h3 className="font-semibold mb-2">Multi-Database Support</h3>
             <p className="text-sm text-muted-foreground">
-              Connect to PostgreSQL, MongoDB or ClickHouse with a unified interface.
+              Connect to PostgreSQL, MongoDB, ClickHouse or Redis with a unified interface.
             </p>
           </div>
 

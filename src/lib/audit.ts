@@ -14,6 +14,7 @@ export type AuditAction =
   | "data.insert"
   | "data.update"
   | "data.delete"
+  | "redis.flush"
   | "settings.change";
 
 interface AuditEntry {

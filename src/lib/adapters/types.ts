@@ -1,6 +1,6 @@
 // Database Adapter Types - Unified interface for all database types
 
-export type DatabaseType = 'postgresql' | 'mongodb' | 'clickhouse';
+export type DatabaseType = 'postgresql' | 'mongodb' | 'clickhouse' | 'redis';
 
 export interface AdapterCapabilities {
   supportsUpdate: boolean;
@@ -17,7 +17,7 @@ export interface ConnectionConfig {
 
 export interface TableInfo {
   name: string;
-  type: 'table' | 'collection' | 'view';
+  type: 'table' | 'collection' | 'view' | 'keyspace';
   schema?: string; // For PostgreSQL
   rowCount?: number;
   sizeBytes?: number;

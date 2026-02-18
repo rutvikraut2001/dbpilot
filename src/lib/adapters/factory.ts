@@ -4,6 +4,7 @@ import { DatabaseAdapter, DatabaseType } from './types';
 import { PostgresAdapter } from './postgres';
 import { MongoDBAdapter } from './mongodb';
 import { ClickHouseAdapter } from './clickhouse';
+import { RedisAdapter } from './redis';
 import { schemaCache } from '../cache';
 
 // Adapter cache to reuse connections
@@ -17,6 +18,8 @@ export function createAdapter(type: DatabaseType, connectionString: string): Dat
       return new MongoDBAdapter(connectionString);
     case 'clickhouse':
       return new ClickHouseAdapter(connectionString);
+    case 'redis':
+      return new RedisAdapter(connectionString);
     default:
       throw new Error(`Unsupported database type: ${type}`);
   }

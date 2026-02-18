@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useCallback } from 'react';
-import { Table2, FileText, RefreshCw, Search, ChevronRight, Database } from 'lucide-react';
+import { useEffect, useCallback, useState } from 'react';
+import { Table2, FileText, RefreshCw, Search, ChevronRight, Database, Key, Trash2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -12,12 +12,21 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useStudioStore, useFilteredTables } from '@/lib/stores/studio';
-import { useActiveConnection } from '@/lib/stores/connection';
+import { useActiveConnection, useReadOnlyMode } from '@/lib/stores/connection';
 import { cn, formatBytes } from '@/lib/utils';
 
 export function TableBrowser() {
   const activeConnection = useActiveConnection();
+  const readOnlyMode = useReadOnlyMode();
   const filteredTables = useFilteredTables();
   const {
     selectedTable,
@@ -32,6 +41,11 @@ export function TableBrowser() {
     setActiveTab,
     setError,
   } = useStudioStore();
+
+  const [flushDialogOpen, setFlushDialogOpen] = useState(false);
+  const [isFlushing, setIsFlushing] = useState(false);
+
+  const isRedis = activeConnection?.type === 'redis';
 
   const fetchTables = useCallback(async () => {
     if (!activeConnection) return;
@@ -91,6 +105,36 @@ export function TableBrowser() {
     setActiveTab('data');
   };
 
+  const handleFlushDb = async () => {
+    if (!activeConnection) return;
+
+    setIsFlushing(true);
+    try {
+      const response = await fetch('/api/redis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          connectionId: activeConnection.id,
+          action: 'flushdb',
+        }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        setFlushDialogOpen(false);
+        setSelectedTable('');
+        fetchTables();
+      } else {
+        alert(result.error || 'Failed to flush database');
+      }
+    } catch (error) {
+      console.error('Flush error:', error);
+      alert('Failed to flush database');
+    } finally {
+      setIsFlushing(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
@@ -102,34 +146,55 @@ export function TableBrowser() {
               {activeConnection?.name || 'Database'}
             </span>
           </div>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  onClick={fetchTables}
-                  disabled={isLoadingTables}
-                >
-                  <RefreshCw
-                    className={cn(
-                      'h-4 w-4',
-                      isLoadingTables && 'animate-spin'
-                    )}
-                  />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Refresh tables</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <div className="flex items-center gap-1">
+            {isRedis && !readOnlyMode && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+                      onClick={() => setFlushDialogOpen(true)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Flush current database</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={fetchTables}
+                    disabled={isLoadingTables}
+                  >
+                    <RefreshCw
+                      className={cn(
+                        'h-4 w-4',
+                        isLoadingTables && 'animate-spin'
+                      )}
+                    />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {isRedis ? 'Refresh key patterns' : 'Refresh tables'}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
         </div>
 
         {/* Search */}
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Filter tables..."
+            placeholder={isRedis ? 'Filter key patterns...' : 'Filter tables...'}
             value={tableFilter}
             onChange={(e) => setTableFilter(e.target.value)}
             className="pl-8 h-8 text-sm"
@@ -147,7 +212,9 @@ export function TableBrowser() {
             </div>
           ) : filteredTables.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground text-sm">
-              {tableFilter ? 'No matching tables' : 'No tables found'}
+              {tableFilter
+                ? (isRedis ? 'No matching key patterns' : 'No matching tables')
+                : (isRedis ? 'No keys found' : 'No tables found')}
             </div>
           ) : (
             <div className="space-y-1">
@@ -164,7 +231,9 @@ export function TableBrowser() {
                             : 'hover:bg-muted'
                         )}
                       >
-                        {table.type === 'view' ? (
+                        {table.type === 'keyspace' ? (
+                          <Key className="h-4 w-4 shrink-0" />
+                        ) : table.type === 'view' ? (
                           <FileText className="h-4 w-4 shrink-0" />
                         ) : (
                           <Table2 className="h-4 w-4 shrink-0" />
@@ -186,7 +255,7 @@ export function TableBrowser() {
                         <div className="flex gap-2 text-xs">
                           {table.rowCount !== undefined && (
                             <Badge variant="secondary">
-                              {table.rowCount.toLocaleString()} rows
+                              {table.rowCount.toLocaleString()} {isRedis ? 'keys' : 'rows'}
                             </Badge>
                           )}
                           {table.sizeBytes !== undefined && table.sizeBytes > 0 && (
@@ -207,8 +276,39 @@ export function TableBrowser() {
 
       {/* Footer */}
       <div className="p-2 border-t text-xs text-muted-foreground text-center shrink-0">
-        {filteredTables.length} table{filteredTables.length !== 1 ? 's' : ''}
+        {isRedis
+          ? `${filteredTables.length} key pattern${filteredTables.length !== 1 ? 's' : ''}`
+          : `${filteredTables.length} table${filteredTables.length !== 1 ? 's' : ''}`}
       </div>
+
+      {/* Flush DB Confirmation Dialog */}
+      <Dialog open={flushDialogOpen} onOpenChange={setFlushDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Flush Database</DialogTitle>
+            <DialogDescription>
+              This will delete <strong>all keys</strong> in the current Redis database.
+              This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setFlushDialogOpen(false)}
+              disabled={isFlushing}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleFlushDb}
+              disabled={isFlushing}
+            >
+              {isFlushing ? 'Flushing...' : 'Flush Database'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

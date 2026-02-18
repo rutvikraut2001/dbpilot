@@ -3,12 +3,17 @@ import { z } from "zod";
 // Identifier validation regex - alphanumeric, underscore, dot (for schema.table)
 const identifierRegex = /^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$/;
 const columnNameRegex = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+// Redis key patterns allow colons, wildcards, hyphens, dots, and digits at start
+const redisPatternRegex = /^[a-zA-Z0-9_:.*\-]+$/;
 
 export const TableNameSchema = z
   .string()
   .min(1, "Table name required")
-  .max(128, "Table name too long")
-  .regex(identifierRegex, "Invalid table name");
+  .max(256, "Table name too long")
+  .refine(
+    (val) => identifierRegex.test(val) || redisPatternRegex.test(val),
+    "Invalid table name"
+  );
 
 export const ColumnNameSchema = z
   .string()
@@ -67,6 +72,7 @@ export function sanitizeError(error: unknown): string {
     msg = msg.replace(/mongodb:\/\/[^@]+@/gi, "mongodb://***@");
     msg = msg.replace(/mongodb\+srv:\/\/[^@]+@/gi, "mongodb+srv://***@");
     msg = msg.replace(/clickhouse:\/\/[^@]+@/gi, "clickhouse://***@");
+    msg = msg.replace(/redis:\/\/[^@]+@/gi, "redis://***@");
     msg = msg.replace(/http:\/\/[^@]+@/gi, "http://***@");
     msg = msg.replace(/https:\/\/[^@]+@/gi, "https://***@");
 

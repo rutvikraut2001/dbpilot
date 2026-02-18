@@ -5,7 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "DB Studio - Universal Database Analyzer",
-  description: "A database-agnostic studio supporting PostgreSQL and MongoDB. Browse schemas, view data, and run queries.",
+  description: "A database-agnostic studio supporting PostgreSQL, MongoDB, ClickHouse and Redis. Browse schemas, view data, and run queries.",
 };
 
 export default function RootLayout({

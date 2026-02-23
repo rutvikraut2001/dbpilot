@@ -71,11 +71,12 @@ export class RedisAdapter extends BaseAdapter {
         },
         enableOfflineQueue: false,
         connectionName: "db-studio",
-        lazyConnect: false,
+        lazyConnect: true,
         enableReadyCheck: true,
         connectTimeout: 10000,
       });
 
+      await this.client.connect();
       await this.client.ping();
       this.connected = true;
     } catch (error) {
@@ -107,9 +108,10 @@ export class RedisAdapter extends BaseAdapter {
         retryStrategy: () => null, // fail immediately, no retries
         enableOfflineQueue: false,
         connectTimeout: 5000,
-        lazyConnect: false,
+        lazyConnect: true,
       });
 
+      await testClient.connect();
       const info = await testClient.info("server");
       const versionMatch = info.match(/redis_version:([^\r\n]+)/);
       const version = versionMatch ? versionMatch[1] : "unknown";

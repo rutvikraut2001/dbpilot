@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 @import "tailwindcss";
 @import "tw-animate-css";
 
@@ -6,8 +7,11 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
-  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --font-sans: 'Space Grotesk', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  --color-aurora-start: #6366f1;
+  --color-aurora-mid: #8b5cf6;
+  --color-aurora-end: #ec4899;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -122,4 +126,177 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Aurora & Glassmorphism Utilities */
+.glass {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.dark .glass {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.aurora-gradient {
+  background: linear-gradient(135deg, var(--color-aurora-start), var(--color-aurora-mid), var(--color-aurora-end));
+}
+
+.aurora-text {
+  background: linear-gradient(135deg, var(--color-aurora-start), var(--color-aurora-mid), var(--color-aurora-end));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.glow-primary {
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.15);
+}
+
+.glow-primary-strong {
+  box-shadow: 0 0 30px rgba(99, 102, 241, 0.3);
+}
+
+.neon-border {
+  border: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+.dark .neon-border {
+  border: 1px solid rgba(99, 102, 241, 0.15);
+}
+
+.shimmer {
+  background: linear-gradient(90deg, transparent 25%, rgba(255,255,255,0.08) 50%, transparent 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.dot-pattern {
+  background-image: radial-gradient(circle, currentColor 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Sky backgrounds */
+.sky-bg {
+  background: linear-gradient(180deg,
+    #dbeafe 0%,
+    #bfdbfe 15%,
+    #e0f2fe 40%,
+    #f0f9ff 70%,
+    #ffffff 100%
+  );
+}
+
+.dark .sky-bg {
+  background: linear-gradient(180deg,
+    #0c1222 0%,
+    #111827 20%,
+    #1e1b4b 50%,
+    #1a1a2e 80%,
+    #0f172a 100%
+  );
+}
+
+/* Stars for dark mode sky */
+.stars-pattern {
+  background-image: none;
+}
+
+.dark .stars-pattern {
+  background-image:
+    radial-gradient(1px 1px at 10% 15%, rgba(255,255,255,0.4), transparent),
+    radial-gradient(1px 1px at 25% 35%, rgba(255,255,255,0.3), transparent),
+    radial-gradient(1.5px 1.5px at 40% 8%, rgba(255,255,255,0.5), transparent),
+    radial-gradient(1px 1px at 55% 42%, rgba(255,255,255,0.25), transparent),
+    radial-gradient(1px 1px at 70% 18%, rgba(255,255,255,0.35), transparent),
+    radial-gradient(1.5px 1.5px at 85% 30%, rgba(255,255,255,0.4), transparent),
+    radial-gradient(1px 1px at 15% 65%, rgba(255,255,255,0.2), transparent),
+    radial-gradient(1px 1px at 35% 80%, rgba(255,255,255,0.3), transparent),
+    radial-gradient(1.5px 1.5px at 60% 70%, rgba(255,255,255,0.35), transparent),
+    radial-gradient(1px 1px at 80% 60%, rgba(255,255,255,0.25), transparent),
+    radial-gradient(1px 1px at 92% 75%, rgba(255,255,255,0.3), transparent),
+    radial-gradient(1px 1px at 48% 55%, rgba(255,255,255,0.2), transparent);
+}
+
+/* Cloud-shaped feature card */
+.cloud-card {
+  position: relative;
+  isolation: isolate;
+  background: rgba(255, 255, 255, 0.88);
+  border-radius: 24px;
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.04),
+    0 1px 6px rgba(0, 0, 0, 0.02);
+  border: 1px solid rgba(200, 210, 230, 0.5);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.cloud-card:hover {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.06),
+    0 2px 10px rgba(0, 0, 0, 0.03);
+  transform: translateY(-2px);
+}
+
+
+.dark .cloud-card {
+  background: rgba(30, 27, 75, 0.75);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.2),
+    0 1px 6px rgba(0, 0, 0, 0.1);
+}
+
+.dark .cloud-card:hover {
+  background: rgba(30, 27, 75, 0.85);
+  border-color: rgba(99, 102, 241, 0.3);
+  box-shadow:
+    0 8px 32px rgba(99, 102, 241, 0.1),
+    0 2px 10px rgba(0, 0, 0, 0.2);
+}
+
+/* Floating cloud animation — wider range */
+@keyframes float-drift {
+  0%, 100% { transform: translateY(0px) translateX(0px); }
+  20% { transform: translateY(-14px) translateX(8px); }
+  40% { transform: translateY(-6px) translateX(-10px); }
+  60% { transform: translateY(-18px) translateX(5px); }
+  80% { transform: translateY(-8px) translateX(-6px); }
+}
+
+.float-drift-1 {
+  animation: float-drift 9s ease-in-out infinite;
+}
+
+.float-drift-2 {
+  animation: float-drift 11s ease-in-out infinite;
+  animation-delay: -2s;
+}
+
+.float-drift-3 {
+  animation: float-drift 13s ease-in-out infinite;
+  animation-delay: -5s;
+}
+
+.float-drift-4 {
+  animation: float-drift 10s ease-in-out infinite;
+  animation-delay: -1s;
+}
+
+.float-drift-5 {
+  animation: float-drift 12s ease-in-out infinite;
+  animation-delay: -4s;
+}
+
+.float-drift-6 {
+  animation: float-drift 14s ease-in-out infinite;
+  animation-delay: -6s;
 }

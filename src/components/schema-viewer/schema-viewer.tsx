@@ -303,8 +303,8 @@ function SchemaViewerInner() {
       if (data.relationships) {
         setRelationships(data.relationships);
       }
-    } catch (error) {
-      console.error('Failed to fetch relationships:', error);
+    } catch {
+      // relationship fetch failed silently
     } finally {
       setIsLoading(false);
     }
@@ -340,8 +340,8 @@ function SchemaViewerInner() {
         if (data.schema) {
           setTableSchemas((prev) => new Map(prev).set(tableName, data.schema));
         }
-      } catch (error) {
-        console.error(`Failed to fetch schema for ${tableName}:`, error);
+      } catch {
+        // schema fetch failed silently
       } finally {
         fetchingRef.current.delete(tableName);
       }
@@ -579,8 +579,7 @@ function SchemaViewerInner() {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-    } catch (error) {
-      console.error('Failed to export schema:', error);
+    } catch {
       alert('Failed to export schema. Please try again.');
     } finally {
       setIsExporting(false);

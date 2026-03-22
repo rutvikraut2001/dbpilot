@@ -168,6 +168,7 @@ export class PostgresAdapter extends BaseAdapter {
       SELECT
         c.column_name as name,
         c.data_type as type,
+        c.udt_name as udt_name,
         c.is_nullable = 'YES' as nullable,
         c.column_default as default_value,
         COALESCE(pk.is_primary, false) as is_primary_key,
@@ -205,9 +206,31 @@ export class PostgresAdapter extends BaseAdapter {
 
     const result = await pool.query(query, [schema, table]);
 
+    // Fetch enum values for USER-DEFINED columns (PostgreSQL enums)
+    const udtNames = result.rows
+      .filter((row) => row.type === 'USER-DEFINED')
+      .map((row) => row.udt_name as string);
+
+    const enumMap: Record<string, string[]> = {};
+    if (udtNames.length > 0) {
+      const uniqueUdts = [...new Set(udtNames)];
+      const enumQuery = `
+        SELECT t.typname, e.enumlabel
+        FROM pg_type t
+        JOIN pg_enum e ON t.oid = e.enumtypid
+        WHERE t.typname = ANY($1)
+        ORDER BY t.typname, e.enumsortorder
+      `;
+      const enumResult = await pool.query(enumQuery, [uniqueUdts]);
+      for (const row of enumResult.rows) {
+        if (!enumMap[row.typname]) enumMap[row.typname] = [];
+        enumMap[row.typname].push(row.enumlabel);
+      }
+    }
+
     return result.rows.map((row) => ({
       name: row.name,
-      type: row.type,
+      type: row.type === 'USER-DEFINED' ? row.udt_name : row.type,
       nullable: row.nullable,
       isPrimaryKey: row.is_primary_key,
       isForeignKey: row.is_foreign_key,
@@ -218,6 +241,7 @@ export class PostgresAdapter extends BaseAdapter {
             column: row.foreign_column,
           }
         : undefined,
+      enumValues: enumMap[row.udt_name] || undefined,
     }));
   }
 
@@ -316,7 +340,28 @@ export class PostgresAdapter extends BaseAdapter {
     const columns = Object.keys(data);
     columns.forEach((col) => this.validateColumnName(col));
 
-    const values = Object.values(data);
+    // Get column types so we can properly serialize JSON/JSONB values
+    const [schema, tbl] = table.includes(".")
+      ? table.split(".")
+      : ["public", table];
+    const colTypeResult = await pool.query(
+      `SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2`,
+      [schema, tbl],
+    );
+    const colTypes: Record<string, string> = {};
+    for (const row of colTypeResult.rows) {
+      colTypes[row.column_name] = row.data_type;
+    }
+
+    const values = columns.map((col) => {
+      const val = data[col];
+      if (val === null || val === undefined) return val;
+      const dtype = (colTypes[col] || "").toLowerCase();
+      if ((dtype === "json" || dtype === "jsonb") && typeof val === "object") {
+        return JSON.stringify(val);
+      }
+      return val;
+    });
     const placeholders = columns.map((_, i) => `$${i + 1}`);
 
     const query = `
@@ -342,7 +387,33 @@ export class PostgresAdapter extends BaseAdapter {
     setColumns.forEach((col) => this.validateColumnName(col));
     Object.keys(primaryKey).forEach((col) => this.validateColumnName(col));
 
-    const values = [...Object.values(data), ...Object.values(primaryKey)];
+    // Get column types so we can properly serialize JSON/JSONB values
+    const [schema, tbl] = table.includes(".")
+      ? table.split(".")
+      : ["public", table];
+    const colTypeResult = await pool.query(
+      `SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2`,
+      [schema, tbl],
+    );
+    const colTypes: Record<string, string> = {};
+    for (const row of colTypeResult.rows) {
+      colTypes[row.column_name] = row.data_type;
+    }
+
+    // Serialize object/array values for json/jsonb columns
+    const serializeValue = (col: string, val: unknown): unknown => {
+      if (val === null || val === undefined) return val;
+      const dtype = (colTypes[col] || "").toLowerCase();
+      if ((dtype === "json" || dtype === "jsonb") && typeof val === "object") {
+        return JSON.stringify(val);
+      }
+      return val;
+    };
+
+    const values = [
+      ...Object.entries(data).map(([col, val]) => serializeValue(col, val)),
+      ...Object.values(primaryKey),
+    ];
 
     const setClause = setColumns
       .map((col, i) => `"${col}" = $${i + 1}`)

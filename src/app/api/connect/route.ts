@@ -5,7 +5,15 @@ import {
   getCachedAdapter,
   removeAdapter,
 } from "@/lib/adapters/factory";
-import { DatabaseType } from "@/lib/adapters/types";
+import { DatabaseType, SSHTunnelConfig } from "@/lib/adapters/types";
+import { SSHTunnel } from "@/lib/adapters/tunnel";
+import {
+  DB_DEFAULT_PORTS,
+  parseHostname,
+  parsePort,
+  redirectToTunnel,
+} from "@/lib/utils/connection-string";
+import { buildConnectionStrategies, diagnoseConnectionError } from "@/lib/utils/connection-diagnostics";
 import {
   setReadOnlyMode,
   clearReadOnlyState,
@@ -51,17 +59,73 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// Test a database connection
+/**
+ * Test a connection with multi-strategy fallback (localhost, IPv4, Docker host, etc.).
+ * Returns the effective connection string that worked (may differ from input).
+ */
+async function testWithStrategies(
+  type: DatabaseType,
+  connectionString: string
+): Promise<{
+  success: boolean;
+  message: string;
+  effectiveConnectionString: string;
+  diagnostics?: { suggestions: string[] };
+}> {
+  const strategies = buildConnectionStrategies(type, connectionString);
+  let lastError: unknown = null;
+  let lastDiagnostics: ReturnType<typeof diagnoseConnectionError> | null = null;
+
+  for (const strategy of strategies) {
+    try {
+      const adapter = createAdapter(type, strategy.connectionString);
+      const result = await adapter.testConnection();
+
+      if (result.success) {
+        const switched = strategy.connectionString !== connectionString;
+        return {
+          success: true,
+          message: switched
+            ? `${result.message} (connected via ${strategy.label})`
+            : result.message,
+          effectiveConnectionString: strategy.connectionString,
+        };
+      }
+
+      // Test returned success=false with a message
+      lastError = new Error(result.message);
+      lastDiagnostics = diagnoseConnectionError(lastError, type, strategy.connectionString);
+    } catch (error) {
+      lastError = error;
+      lastDiagnostics = diagnoseConnectionError(error, type, strategy.connectionString);
+
+      // Don't retry auth errors with different hosts
+      if (lastDiagnostics.category === 'auth') break;
+    }
+  }
+
+  return {
+    success: false,
+    message: lastDiagnostics?.userMessage ?? sanitizeError(lastError),
+    effectiveConnectionString: connectionString,
+    diagnostics: lastDiagnostics
+      ? { suggestions: lastDiagnostics.suggestions }
+      : undefined,
+  };
+}
+
+// Test or establish a database connection
 export async function POST(request: NextRequest) {
   let connectionId: string | undefined;
 
   try {
     const body = await request.json();
-    const { type, connectionString, readOnly } = body as {
+    const { type, connectionString, readOnly, sshTunnel } = body as {
       type: DatabaseType;
       connectionString: string;
       connectionId?: string;
       readOnly?: boolean;
+      sshTunnel?: SSHTunnelConfig;
     };
     connectionId = body.connectionId;
 
@@ -72,27 +136,66 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create a temporary adapter to test connection
-    const adapter = createAdapter(type, connectionString);
-    const result = await adapter.testConnection();
+    let result: { success: boolean; message: string };
+    let effectiveConnectionString = connectionString;
+    let diagnostics: { suggestions: string[] } | undefined;
 
-    // If test successful and connectionId provided, cache the adapter
+    if (sshTunnel?.enabled) {
+      // SSH tunnel: set up a temporary tunnel for testing
+      const remoteHost = sshTunnel.remoteHost || parseHostname(connectionString);
+      const remotePort = sshTunnel.remotePort || parsePort(connectionString, DB_DEFAULT_PORTS[type] ?? 5432);
+      const tempTunnel = new SSHTunnel({ ...sshTunnel, remoteHost, remotePort });
+
+      try {
+        const localPort = await tempTunnel.connect();
+        const tunneledConnectionString = redirectToTunnel(connectionString, localPort);
+
+        const adapter = createAdapter(type, tunneledConnectionString);
+        result = await adapter.testConnection();
+        effectiveConnectionString = connectionString; // keep original for storage
+
+        await tempTunnel.close();
+      } catch (tunnelError) {
+        await tempTunnel.close().catch(() => {});
+        result = {
+          success: false,
+          message: `SSH tunnel failed: ${sanitizeError(tunnelError)}`,
+        };
+      }
+    } else {
+      // Direct connection with multi-strategy fallback
+      const testResult = await testWithStrategies(type, connectionString);
+      result = { success: testResult.success, message: testResult.message };
+      effectiveConnectionString = testResult.effectiveConnectionString;
+      diagnostics = testResult.diagnostics;
+    }
+
+    // If test successful and connectionId provided, cache the adapter for the session
     if (result.success && connectionId) {
-      const cachedAdapter = getOrCreateAdapter(
+      const cachedAdapter = await getOrCreateAdapter(
         connectionId,
         type,
-        connectionString
+        effectiveConnectionString,
+        sshTunnel
       );
       await cachedAdapter.connect();
 
       // Initialize server-side read-only state
-      // Default to false (write enabled) unless explicitly set
       setReadOnlyMode(connectionId, readOnly ?? false);
 
       audit("connection.create", {
         connectionId,
         details: { type },
         success: true,
+      });
+
+      // Return the effective connection string so client can store it
+      return NextResponse.json({
+        ...result,
+        effectiveConnectionString:
+          effectiveConnectionString !== connectionString
+            ? effectiveConnectionString
+            : undefined,
       });
     } else if (!result.success) {
       audit("connection.test", {
@@ -103,7 +206,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    return NextResponse.json(result);
+    return NextResponse.json({ ...result, diagnostics });
   } catch (error) {
     console.error("Connection error:", error);
 

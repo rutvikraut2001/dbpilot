@@ -5,8 +5,9 @@ import "server-only";
  * This state CANNOT be manipulated by the client, ensuring security.
  */
 
-// Server-side read-only state per connection
-const readOnlyState = new Map<string, boolean>();
+// Persist on globalThis so it survives HMR recompilation in dev mode.
+const globalForState = globalThis as unknown as { __readOnlyState?: Map<string, boolean> };
+const readOnlyState = (globalForState.__readOnlyState ??= new Map<string, boolean>());
 
 /**
  * Set the read-only mode for a connection.

@@ -51,23 +51,42 @@ Open [http://localhost:3000](http://localhost:3000).
 ### Multi-Database Support
 | Database | Browse Data | Run Queries | Schema / ER Diagram | Notes |
 |---|---|---|---|---|
-| **PostgreSQL** | ✅ | ✅ SQL | ✅ | Full CRUD, column types, FK relationships |
-| **MongoDB** | ✅ | ✅ MQL | ✅ | Document browser, nested field inference |
-| **ClickHouse** | ✅ | ✅ SQL | ✅ | Columnar analytics, append-only write model |
-| **Redis** | ✅ | ✅ Commands | — | Key browser by pattern, TTL, type badges, flush |
+| **PostgreSQL** | CRUD | SQL | ER Diagram | Full CRUD, column types, FK relationships |
+| **MongoDB** | CRUD | MQL | ER Diagram | Document browser, nested field inference |
+| **ClickHouse** | Read + Append | SQL | ER Diagram | Columnar analytics, append-only write model |
+| **Redis** | Key Browser | Commands | — | Key browser by pattern, TTL, type badges, flush |
 
-### General Features
+### Data Browsing & Editing
+- **Multi-Tab Data Viewer** — open multiple tables as tabs, switch between them like browser tabs
+- **Smart Cell Display** — JSON expansion, boolean badges, UUID detection with click-to-copy
+- **Double-Click Field Edit** — double-click any cell to edit just that field in a focused popup
+- **Full Row Edit** — click the pencil icon for a pgAdmin-style dialog with all fields, dynamic sizing based on column count
+- **Inline Copy** — hover any cell to copy its value; ID fields (UUIDs, ObjectIds) have persistent copy buttons
+- **CSV Export** — export current table data to CSV from the toolbar
+- **Column Resizing** — drag column borders to resize
+
+### Connection & Diagnostics
+- **Smart Connect** — auto-tries multiple connection strategies (localhost, 127.0.0.1, host.docker.internal, Unix socket)
+- **SSH Tunneling** — connect through SSH with password or private key auth
+- **Connection Diagnostics** — actionable error messages with suggestions when connections fail
+- **Connection Health Monitoring** — background polling with auto-reconnect and status indicator
 - **Multi-DB Switcher** — toggle between saved connections from the header without disconnecting
-- **Schema Visualization** — interactive ER diagrams with PK/FK relationships (PostgreSQL, MongoDB, ClickHouse)
-- **Query Editor** — Monaco-powered editor with syntax highlighting for SQL, MQL, and Redis commands
-- **Redis Cache Browser** — scan keys by pattern, view type-colored badges (string/hash/list/set/zset/stream), TTL countdown, memory usage per key
+- **Localhost Fallback** — transparent retry with host.docker.internal for Docker environments
+
+### Query & Schema
+- **Query Editor** — Monaco-powered editor with syntax highlighting for SQL, MongoDB queries, and Redis commands
+- **Schema Visualization** — interactive ER diagrams with PK/FK relationships, auto-layout, and export
+- **Redis Cache Browser** — scan keys by pattern, view type badges, TTL countdown, memory usage per key
 - **Flush Operations** — Flush DB or Flush All directly from the Redis sidebar/toolbar (with confirmation)
-- **Inline Data Editing** — double-click any cell to edit values in-place
+
+### UI & Experience
+- **Aurora/Neon Theme** — modern gradient design with Space Grotesk + JetBrains Mono fonts
+- **Dark / Light / System Theme** — adapts to your OS preference, toggle from any page
 - **Read-Only Mode** — server-side enforcement prevents accidental writes to production databases
-- **Connection Management** — save, rename, and switch between multiple database connections
 - **Resizable Sidebar** — drag to adjust the table/key browser width
-- **Dark / Light / System Theme** — adapts to your OS preference
-- **Docker Support** — optimised multi-stage image (~90–100 MB)
+- **Debounced Table Filter** — fast filtering in the sidebar with 200ms debounce
+- **Skeleton Loading** — smooth loading states instead of spinners
+- **Feedback System** — built-in feedback form accessible from the landing page
 
 ---
 
@@ -114,6 +133,8 @@ redis://:password@localhost:6379/2
 | Schema Visualization | [React Flow / XY Flow](https://reactflow.dev/) |
 | Query Editor | [Monaco Editor](https://microsoft.github.io/monaco-editor/) |
 | Data Table | [TanStack Table v8](https://tanstack.com/table) |
+| Fonts | [Space Grotesk](https://fonts.google.com/specimen/Space+Grotesk) + [JetBrains Mono](https://fonts.google.com/specimen/JetBrains+Mono) |
+| SSH Tunneling | [ssh2](https://github.com/mscdex/ssh2) |
 | PostgreSQL | [node-postgres (pg)](https://node-postgres.com/) |
 | MongoDB | [MongoDB Node Driver](https://www.mongodb.com/docs/drivers/node/current/) |
 | ClickHouse | [@clickhouse/client](https://github.com/ClickHouse/clickhouse-js) |
@@ -168,7 +189,7 @@ docker compose --profile with-db up -d
 docker build -t db-studio .
 ```
 
-The multi-stage Dockerfile produces a lean Alpine image (~90–100 MB) by:
+The multi-stage Dockerfile produces a lean Alpine image (~90-100 MB) by:
 - Using `output: standalone` to bundle only traced server dependencies
 - Excluding build-time artifacts: TypeScript compiler, SWC compiler binaries, sharp/libvips image libraries
 - Force-including packages with dynamic exports: `@clickhouse/client`
@@ -203,13 +224,16 @@ docker compose down && docker compose up -d
 
 | Feature | How to use |
 |---|---|
-| **Data Tab** | Click a table/key pattern in the sidebar to browse data. Supports pagination, sorting, and inline editing. |
+| **Data Tab** | Click a table/key pattern in the sidebar to open it as a tab. Double-click any cell to edit that field. Use the pencil icon for full row editing. |
+| **Multi-Tab Browsing** | Each table opens as a closeable tab. Switch between tables without losing context. FK clicks open related tables in new tabs. |
 | **Query Tab** | Write and execute SQL (PostgreSQL/ClickHouse), MongoDB queries (JSON), or Redis commands. |
-| **Schema Tab** | Available for PostgreSQL, MongoDB, and ClickHouse. Shows interactive ER diagram. |
+| **Schema Tab** | Available for PostgreSQL, MongoDB, and ClickHouse. Shows interactive ER diagram with export. |
 | **Redis Cache** | Browse keys grouped by pattern (`user:*`), see type, TTL, memory. Flush individual DB or entire Redis instance. |
 | **Multi-DB Switcher** | Click the connection badge in the header to switch between saved databases instantly. |
 | **Read-Only Toggle** | Enable in the header to block all write operations (enforced server-side). |
-| **Theme Toggle** | Sun/moon icon in the header to switch light, dark, or system theme. |
+| **Theme Toggle** | Sun/moon icon in the header to switch light, dark, or system theme. Available on both landing page and studio. |
+| **SSH Tunnel** | Expand "Advanced" in the connection form to configure SSH tunneling with password or key auth. |
+| **Feedback** | Click "Feedback" in the header to send suggestions or bug reports. |
 
 ---
 
@@ -223,14 +247,20 @@ docker compose down && docker compose up -d
 - [x] Monaco query editor
 - [x] Interactive ER diagram (React Flow)
 - [x] Read-only mode (server-side enforcement)
-- [x] Docker image (~90–100 MB)
+- [x] Docker image (~90-100 MB)
 - [x] Connection management (save, rename, delete)
+- [x] SSH tunnel support
+- [x] Connection diagnostics with actionable suggestions
+- [x] Connection health monitoring with auto-reconnect
+- [x] Multi-tab data browsing
+- [x] Double-click single-field editing
+- [x] Smart cell display (JSON, booleans, UUIDs, copy-on-hover)
+- [x] CSV export
+- [x] Dark/light/system theme with aurora design
 - [ ] MySQL / MariaDB support
 - [ ] SQLite support
-- [ ] Export data to CSV / JSON
 - [ ] Saved queries
 - [ ] Query history persistence
-- [ ] SSH tunnel support
 - [ ] Index management UI
 - [ ] Table structure editing
 
@@ -273,7 +303,7 @@ MIT License — see the [LICENSE](LICENSE) file for details.
 ---
 
 <p align="center">
-  Made with ❤️ by <a href="https://github.com/rutvikraut2001">Rutvik</a>
+  Made with love by <a href="https://github.com/rutvikraut2001">Rutvik</a>
 </p>
 <p align="center">
   © 2025 DBPilot. MIT License.

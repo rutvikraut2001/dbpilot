@@ -33,9 +33,8 @@ export function MonacoEditor({ value, onChange, language }: MonacoEditorProps) {
 
         setMonaco(monacoModule);
         setIsLoading(false);
-      } catch (err) {
+      } catch {
         if (cancelled) return;
-        console.error('Failed to load Monaco:', err);
         setLoadError('Failed to load editor. Please refresh the page.');
         setIsLoading(false);
       }

@@ -61,6 +61,7 @@ interface StudioState {
   setError: (error: string | null) => void;
 
   // Data tab actions
+  openTableTab: (tableName: string) => string;
   addDataTab: (tableName: string, filter?: { column: string; value: unknown }) => string;
   removeDataTab: (id: string) => void;
   setActiveDataTab: (id: string) => void;
@@ -127,6 +128,29 @@ export const useStudioStore = create<StudioState>()((set, get) => ({
 
   setError: (error) => set({ error }),
 
+  openTableTab: (tableName) => {
+    const { dataTabs } = get();
+    // Check if tab already exists (matching tableName, no filter)
+    const existing = dataTabs.find(t => t.tableName === tableName && !t.filter);
+    if (existing) {
+      set({ activeDataTabId: existing.id, selectedTable: tableName, activeTab: 'data' });
+      return existing.id;
+    }
+    // Create new tab
+    const newTab: DataTab = {
+      id: generateTabId('data'),
+      tableName,
+      label: tableName,
+    };
+    set({
+      dataTabs: [...dataTabs, newTab],
+      activeDataTabId: newTab.id,
+      selectedTable: tableName,
+      activeTab: 'data',
+    });
+    return newTab.id;
+  },
+
   addDataTab: (tableName, filter) => {
     const { dataTabs } = get();
     const label = filter
@@ -163,9 +187,14 @@ export const useStudioStore = create<StudioState>()((set, get) => ({
       }
     }
 
+    // Update selectedTable based on the new active tab
+    const newActiveTab = newTabs.find(t => t.id === newActiveId);
+    const newSelectedTable = newActiveTab && !newActiveTab.filter ? newActiveTab.tableName : (newActiveTab ? get().selectedTable : null);
+
     set({
       dataTabs: newTabs,
       activeDataTabId: newActiveId,
+      selectedTable: newSelectedTable,
     });
   },
 

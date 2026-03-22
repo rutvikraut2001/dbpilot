@@ -132,7 +132,6 @@ export function DatabaseSwitcher({ activeConnection }: DatabaseSwitcherProps) {
       // Adapter is ready — activate the new connection (triggers TableBrowser to reload)
       setActiveConnection(connection.id);
     } catch (err) {
-      console.error('Failed to switch connection:', err);
       setError(err instanceof Error ? err.message : 'Failed to switch');
     } finally {
       setSwitchingTo(null);

@@ -8,11 +8,26 @@ export interface AdapterCapabilities {
   supportsTransactions: boolean;
 }
 
+export interface SSHTunnelConfig {
+  enabled: boolean;
+  host: string;
+  port: number;
+  username: string;
+  authMethod: 'password' | 'privateKey';
+  password?: string;
+  privateKey?: string;
+  passphrase?: string;
+  // Remote DB host:port as seen from SSH server (auto-parsed from connection string if omitted)
+  remoteHost?: string;
+  remotePort?: number;
+}
+
 export interface ConnectionConfig {
   type: DatabaseType;
   connectionString: string;
   name: string;
   id: string;
+  sshTunnel?: SSHTunnelConfig;
 }
 
 export interface TableInfo {
@@ -34,6 +49,8 @@ export interface ColumnInfo {
     table: string;
     column: string;
   };
+  // For PostgreSQL enum columns — the allowed values
+  enumValues?: string[];
   // For MongoDB - indicates if field is commonly present
   frequency?: number;
 }

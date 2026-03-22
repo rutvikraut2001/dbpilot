@@ -47,6 +47,8 @@ import {
 } from '@/lib/stores/connection';
 import { useStudioStore, TabType } from '@/lib/stores/studio';
 import { ConnectionConfig } from '@/lib/adapters/types';
+import { useConnectionHealth, ConnectionHealthStatus } from '@/hooks/use-connection-health';
+import { toast } from 'sonner';
 
 export default function StudioPage() {
   const router = useRouter();
@@ -70,10 +72,38 @@ export default function StudioPage() {
     }
   }, [activeConnection, activeTab, setActiveTab]);
 
-  // Reconnection state
-  const [isReconnecting, setIsReconnecting] = useState(false);
+  // Reconnection state — start true so UI waits for adapter confirmation
+  const [isReconnecting, setIsReconnecting] = useState(true);
   const [reconnectFailed, setReconnectFailed] = useState(false);
   const reconnectAttempted = useRef(false);
+
+  // Connection health monitoring
+  const { status: healthStatus, reconnect: healthReconnect } = useConnectionHealth({
+    connectionId: activeConnection?.id ?? null,
+    connectionType: activeConnection?.type,
+    connectionString: activeConnection?.connectionString,
+  });
+
+  // Toast on health status changes
+  const prevHealthStatus = useRef<ConnectionHealthStatus>('healthy');
+  useEffect(() => {
+    if (prevHealthStatus.current !== healthStatus) {
+      if (healthStatus === 'unhealthy') {
+        toast.warning('Connection lost', {
+          description: 'Attempting to reconnect...',
+          duration: 5000,
+        });
+      } else if (healthStatus === 'healthy' && prevHealthStatus.current !== 'healthy') {
+        toast.success('Connection restored');
+      } else if (healthStatus === 'disconnected') {
+        toast.error('Connection lost', {
+          description: 'Could not reconnect. Click "Reconnect" to try again.',
+          duration: 10000,
+        });
+      }
+      prevHealthStatus.current = healthStatus;
+    }
+  }, [healthStatus]);
 
   // Sidebar resize state
   const [sidebarWidth, setSidebarWidth] = useState(280);
@@ -171,6 +201,7 @@ export default function StudioPage() {
       checkAndReconnect(activeConnection);
     } else {
       // Redirect to home if no active connection
+      setIsReconnecting(false);
       router.push('/');
     }
   }, [hasHydrated, activeConnection, router, setActiveConnection]);
@@ -230,6 +261,38 @@ export default function StudioPage() {
           </div>
           <span className="text-muted-foreground">/</span>
           <DatabaseSwitcher activeConnection={activeConnection} />
+
+          {/* Health status indicator */}
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex items-center gap-1.5">
+                  <div className={`h-2 w-2 rounded-full ${
+                    healthStatus === 'healthy' ? 'bg-green-500' :
+                    healthStatus === 'reconnecting' ? 'bg-yellow-500 animate-pulse' :
+                    healthStatus === 'unhealthy' ? 'bg-yellow-500' :
+                    'bg-red-500'
+                  }`} />
+                  {healthStatus === 'disconnected' && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs text-destructive"
+                      onClick={healthReconnect}
+                    >
+                      Reconnect
+                    </Button>
+                  )}
+                </div>
+              </TooltipTrigger>
+              <TooltipContent>
+                {healthStatus === 'healthy' && 'Connection healthy'}
+                {healthStatus === 'unhealthy' && 'Connection unhealthy'}
+                {healthStatus === 'reconnecting' && 'Reconnecting...'}
+                {healthStatus === 'disconnected' && 'Disconnected — click Reconnect'}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
 
         <div className="flex items-center gap-4">
@@ -375,6 +438,27 @@ export default function StudioPage() {
               </Tooltip>
             </TooltipProvider>
           </div>
+
+          {/* Connection health banner */}
+          {(healthStatus === 'unhealthy' || healthStatus === 'disconnected') && (
+            <div className="px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 flex items-center justify-between shrink-0">
+              <span className="text-xs text-amber-600 dark:text-amber-400">
+                {healthStatus === 'disconnected'
+                  ? 'Connection lost. Data may be stale.'
+                  : 'Connection unstable. Attempting to reconnect...'}
+              </span>
+              {healthStatus === 'disconnected' && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  onClick={healthReconnect}
+                >
+                  Retry
+                </Button>
+              )}
+            </div>
+          )}
 
           {/* Tab Content */}
           <div className="flex-1 overflow-hidden">

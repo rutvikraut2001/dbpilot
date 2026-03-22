@@ -5,6 +5,11 @@ const nextConfig: NextConfig = {
   // Enable standalone output for Docker deployment
   output: "standalone",
 
+  // Keep native Node.js packages out of the Turbopack/webpack bundle so they
+  // are resolved at runtime from node_modules instead of being inlined.
+  // ssh2 uses native crypto (non-ESM placeable) and must stay external.
+  serverExternalPackages: ["ssh2"],
+
   // Set the root directory for Turbopack to avoid the lockfile warning
   turbopack: {
     root: path.resolve(__dirname),

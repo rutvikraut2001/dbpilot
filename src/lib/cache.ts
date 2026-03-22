@@ -98,8 +98,9 @@ class MemoryCache {
   }
 }
 
-// Singleton cache instance
-export const schemaCache = new MemoryCache();
+// Persist cache on globalThis so it survives HMR recompilation in dev mode.
+const globalForCache = globalThis as unknown as { __schemaCache?: MemoryCache };
+export const schemaCache = (globalForCache.__schemaCache ??= new MemoryCache());
 
 // Cache TTL constants (in milliseconds)
 export const CACHE_TTL = {

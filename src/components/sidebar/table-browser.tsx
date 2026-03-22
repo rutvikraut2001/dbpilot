@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useCallback, useState } from 'react';
+import { useEffect, useCallback, useState, useRef } from 'react';
 import { Table2, FileText, RefreshCw, Search, ChevronRight, Database, Key, Trash2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -31,6 +31,7 @@ export function TableBrowser() {
   const {
     selectedTable,
     setSelectedTable,
+    openTableTab,
     setTables,
     setTableSchema,
     tableFilter,
@@ -38,12 +39,26 @@ export function TableBrowser() {
     isLoadingTables,
     setIsLoadingTables,
     setIsLoadingSchema,
-    setActiveTab,
     setError,
   } = useStudioStore();
 
   const [flushDialogOpen, setFlushDialogOpen] = useState(false);
   const [isFlushing, setIsFlushing] = useState(false);
+  const [localFilter, setLocalFilter] = useState(tableFilter);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleFilterChange = useCallback((value: string) => {
+    setLocalFilter(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setTableFilter(value);
+    }, 200);
+  }, [setTableFilter]);
+
+  // Sync local filter when store filter changes externally
+  useEffect(() => {
+    setLocalFilter(tableFilter);
+  }, [tableFilter]);
 
   const isRedis = activeConnection?.type === 'redis';
 
@@ -86,8 +101,8 @@ export function TableBrowser() {
         if (!data.error) {
           setTableSchema(data.schema);
         }
-      } catch (error) {
-        console.error('Failed to load schema:', error);
+      } catch {
+        // schema load failed silently
       } finally {
         setIsLoadingSchema(false);
       }
@@ -100,9 +115,8 @@ export function TableBrowser() {
   }, [fetchTables]);
 
   const handleTableSelect = (tableName: string) => {
-    setSelectedTable(tableName);
+    openTableTab(tableName);
     fetchTableSchema(tableName);
-    setActiveTab('data');
   };
 
   const handleFlushDb = async () => {
@@ -127,8 +141,7 @@ export function TableBrowser() {
       } else {
         alert(result.error || 'Failed to flush database');
       }
-    } catch (error) {
-      console.error('Flush error:', error);
+    } catch {
       alert('Failed to flush database');
     } finally {
       setIsFlushing(false);
@@ -195,8 +208,8 @@ export function TableBrowser() {
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder={isRedis ? 'Filter key patterns...' : 'Filter tables...'}
-            value={tableFilter}
-            onChange={(e) => setTableFilter(e.target.value)}
+            value={localFilter}
+            onChange={(e) => handleFilterChange(e.target.value)}
             className="pl-8 h-8 text-sm"
           />
         </div>

@@ -52,14 +52,15 @@ export function diagnoseConnectionError(error: unknown, dbType: DatabaseType, co
     };
   }
 
-  if (lower.includes('enotfound')) {
+  if (lower.includes('enotfound') || lower.includes('eai_again') || lower.includes('getaddrinfo')) {
     return {
       category: 'dns',
       userMessage: 'Hostname could not be resolved.',
       suggestions: [
         'Check spelling of hostname',
-        'Try using IP address directly',
+        'Try using IP address directly (127.0.0.1 or 172.17.0.1 for Docker)',
         'Check DNS settings',
+        'If using Docker, try host.docker.internal or 172.17.0.1',
       ],
       isRetryable: true,
     };
@@ -115,13 +116,14 @@ export function diagnoseConnectionError(error: unknown, dbType: DatabaseType, co
     };
   }
 
-  if (lower.includes('ehostunreach')) {
+  if (lower.includes('ehostunreach') || lower.includes('enetunreach')) {
     return {
       category: 'unreachable',
       userMessage: 'Host is unreachable.',
       suggestions: [
-        'If database is in Docker, try host.docker.internal',
+        'If database is in Docker, try host.docker.internal or 172.17.0.1',
         'Check network connectivity',
+        'Try using 127.0.0.1 or 0.0.0.0 instead',
       ],
       isRetryable: true,
     };
@@ -129,11 +131,12 @@ export function diagnoseConnectionError(error: unknown, dbType: DatabaseType, co
 
   return {
     category: 'unknown',
-    userMessage: 'Connection failed.',
+    userMessage: `Connection failed: ${message || 'Unknown error'}`,
     suggestions: [
       'Check the connection string format',
       'Verify the database server is running',
       'Check network connectivity',
+      'If running via Docker with sudo, try 127.0.0.1, 0.0.0.0, or 172.17.0.1 as host',
     ],
     isRetryable: true,
   };
@@ -158,10 +161,24 @@ export function buildConnectionStrategies(
       });
     }
 
+    // Add 0.0.0.0 (Docker often binds to this)
+    if (hostname !== '0.0.0.0') {
+      strategies.push({
+        connectionString: replaceHost(connectionString, hostname, '0.0.0.0'),
+        label: 'All interfaces',
+      });
+    }
+
     // Add Docker host
     strategies.push({
       connectionString: replaceHost(connectionString, hostname, 'host.docker.internal'),
       label: 'Docker host',
+    });
+
+    // Add Docker bridge gateway
+    strategies.push({
+      connectionString: replaceHost(connectionString, hostname, '172.17.0.1'),
+      label: 'Docker bridge gateway',
     });
 
     // For PostgreSQL, try Unix socket
@@ -174,10 +191,18 @@ export function buildConnectionStrategies(
       });
     }
   } else if (hostname === 'host.docker.internal') {
-    // Try localhost instead
+    // Try localhost and Docker bridge
     strategies.push({
       connectionString: replaceHost(connectionString, hostname, 'localhost'),
       label: 'Localhost',
+    });
+    strategies.push({
+      connectionString: replaceHost(connectionString, hostname, '127.0.0.1'),
+      label: 'IPv4 explicit',
+    });
+    strategies.push({
+      connectionString: replaceHost(connectionString, hostname, '172.17.0.1'),
+      label: 'Docker bridge gateway',
     });
   }
 

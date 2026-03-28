@@ -7,10 +7,12 @@ import {
   flexRender,
   ColumnDef,
   ColumnResizeMode,
+  RowSelectionState,
 } from '@tanstack/react-table';
 import {
   Trash2,
   X,
+  XCircle,
   Pencil,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -74,6 +76,9 @@ function DataTable({
   const [flushAllDialogOpen, setFlushAllDialogOpen] = useState(false);
   const [isFlushing, setIsFlushing] = useState(false);
 
+  // Row selection state
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+
   // Column resizing
   const [columnResizeMode] = useState<ColumnResizeMode>('onChange');
   const [columnSizing, setColumnSizing] = useState({});
@@ -114,6 +119,7 @@ function DataTable({
 
       setData(result.data);
       setTotalRows(result.total);
+      setRowSelection({});
     } catch {
       // fetch error — silently fail, toolbar shows stale state
     } finally {
@@ -207,6 +213,51 @@ function DataTable({
     }
   };
 
+  // Bulk delete state
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+
+  const selectedRowCount = Object.keys(rowSelection).length;
+
+  const handleBulkDelete = async () => {
+    if (!activeConnection || selectedRowCount === 0) return;
+
+    setIsBulkDeleting(true);
+    let successCount = 0;
+    let failCount = 0;
+
+    const selectedRows = table.getSelectedRowModel().rows.map((r) => r.original);
+
+    for (const row of selectedRows) {
+      try {
+        const primaryKey = getPrimaryKey(row);
+        const response = await fetch(
+          `/api/data?connectionId=${activeConnection.id}&table=${tableName}&primaryKey=${encodeURIComponent(JSON.stringify(primaryKey))}&readOnly=${readOnlyMode}`,
+          { method: 'DELETE' }
+        );
+        const result = await response.json();
+        if (result.success) {
+          successCount++;
+        } else {
+          failCount++;
+        }
+      } catch {
+        failCount++;
+      }
+    }
+
+    setIsBulkDeleting(false);
+    setBulkDeleteDialogOpen(false);
+    setRowSelection({});
+
+    if (failCount === 0) {
+      toast.success(`${successCount} ${isRedis ? 'key' : 'row'}${successCount > 1 ? 's' : ''} deleted`);
+    } else {
+      toast.error(`Deleted ${successCount}, failed ${failCount}`);
+    }
+    fetchData();
+  };
+
   const handleFlushAll = async () => {
     if (!activeConnection) return;
 
@@ -235,6 +286,9 @@ function DataTable({
       setIsFlushing(false);
     }
   };
+
+  const canEdit = !readOnlyMode && !isRedis;
+  const canDelete = !readOnlyMode;
 
   const handleExportCSV = () => {
     if (data.length === 0) return;
@@ -269,6 +323,36 @@ function DataTable({
   const columns: ColumnDef<RowData, unknown>[] = useMemo(() => {
     if (data.length === 0) return [];
 
+    const cols: ColumnDef<RowData, unknown>[] = [];
+
+    // Checkbox selection column (only when not read-only)
+    if (canDelete) {
+      cols.push({
+        id: 'select',
+        header: ({ table: t }) => (
+          <input
+            type="checkbox"
+            checked={t.getIsAllPageRowsSelected()}
+            onChange={t.getToggleAllPageRowsSelectedHandler()}
+            className="h-3.5 w-3.5 rounded accent-primary cursor-pointer"
+          />
+        ),
+        cell: ({ row: r }) => (
+          <input
+            type="checkbox"
+            checked={r.getIsSelected()}
+            onChange={r.getToggleSelectedHandler()}
+            onClick={(e) => e.stopPropagation()}
+            className="h-3.5 w-3.5 rounded accent-primary cursor-pointer"
+          />
+        ),
+        size: 40,
+        minSize: 40,
+        maxSize: 40,
+        enableResizing: false,
+      });
+    }
+
     const dataCols: ColumnDef<RowData, unknown>[] = Object.keys(data[0]).map((key) => ({
       accessorKey: key,
       header: () => (
@@ -298,22 +382,24 @@ function DataTable({
       maxSize: isRedis && key === 'value' ? 1000 : 600,
     }));
 
-    return dataCols;
-  }, [data, sortBy, sortOrder, isRedis]);
+    cols.push(...dataCols);
+    return cols;
+  }, [data, sortBy, sortOrder, isRedis, canDelete]);
 
   const table = useReactTable({
     data,
     columns,
     getCoreRowModel: getCoreRowModel(),
     columnResizeMode,
+    enableRowSelection: canDelete,
+    onRowSelectionChange: setRowSelection,
     onColumnSizingChange: setColumnSizing,
     state: {
       columnSizing,
+      rowSelection,
     },
   });
 
-  const canEdit = !readOnlyMode && !isRedis;
-  const canDelete = !readOnlyMode;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -324,9 +410,11 @@ function DataTable({
         isLoading={isLoading}
         readOnlyMode={readOnlyMode}
         filter={filter}
+        selectedCount={selectedRowCount}
         onRefresh={fetchData}
         onExportCSV={handleExportCSV}
         onFlushAll={isRedis ? () => setFlushAllDialogOpen(true) : undefined}
+        onBulkDelete={canDelete && selectedRowCount > 0 ? () => setBulkDeleteDialogOpen(true) : undefined}
       />
 
       {/* Table */}
@@ -344,7 +432,10 @@ function DataTable({
                 {headerGroup.headers.map((header) => (
                   <th
                     key={header.id}
-                    className="relative text-left px-4 py-3 border-b border-r border-border/50 bg-muted/80 first:border-l-0"
+                    className={cn(
+                      'relative text-left px-4 py-3 border-b border-r border-border/50 bg-muted/80 first:border-l-0',
+                      header.column.id === 'select' && 'sticky left-0 z-[2] px-3'
+                    )}
                     style={{ width: header.getSize() }}
                   >
                     {header.isPlaceholder
@@ -409,18 +500,23 @@ function DataTable({
                 </td>
               </tr>
             ) : (
-              table.getRowModel().rows.map((row, rowIndex) => (
+              table.getRowModel().rows.map((row, rowIndex) => {
+                const isSelected = row.getIsSelected();
+                return (
                 <tr
                   key={row.id}
                   className={cn(
                     'border-b border-border/30 transition-colors group',
-                    rowIndex % 2 === 0
-                      ? 'bg-background hover:bg-muted/30'
-                      : 'bg-muted/20 hover:bg-muted/40'
+                    isSelected
+                      ? 'bg-primary/10 hover:bg-primary/15'
+                      : rowIndex % 2 === 0
+                        ? 'bg-background hover:bg-muted/30'
+                        : 'bg-muted/20 hover:bg-muted/40'
                   )}
                 >
                   {row.getVisibleCells().map((cell) => {
                     const columnId = cell.column.id;
+                    const isSelectCol = columnId === 'select';
                     const value = cell.getValue();
                     const fkInfo = fkLookup[columnId];
                     return (
@@ -428,17 +524,20 @@ function DataTable({
                         key={cell.id}
                         className={cn(
                           'px-4 py-2 border-r border-border/30 relative',
-                          canEdit && 'cursor-pointer'
+                          canEdit && !isSelectCol && 'cursor-pointer',
+                          isSelectCol && 'sticky left-0 z-[1] px-3 bg-inherit'
                         )}
                         style={{ width: cell.column.getSize() }}
                         onDoubleClick={() => {
-                          if (canEdit) {
+                          if (canEdit && !isSelectCol) {
                             setEditingRowData(row.original);
                             setEditingField(columnId);
                           }
                         }}
                       >
-                        {isRedis ? (
+                        {isSelectCol ? (
+                          flexRender(cell.column.columnDef.cell, cell.getContext())
+                        ) : isRedis ? (
                           <RedisCellDisplay
                             columnId={columnId}
                             value={value}
@@ -499,7 +598,8 @@ function DataTable({
                     </td>
                   )}
                 </tr>
-              ))
+                );
+              })
             )}
           </tbody>
         </table>
@@ -610,6 +710,34 @@ function DataTable({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Bulk Delete Confirmation Dialog */}
+      <Dialog open={bulkDeleteDialogOpen} onOpenChange={setBulkDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete {selectedRowCount} {isRedis ? 'key' : 'row'}{selectedRowCount > 1 ? 's' : ''}</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete <strong>{selectedRowCount}</strong> selected {isRedis ? 'key' : 'row'}{selectedRowCount > 1 ? 's' : ''}? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setBulkDeleteDialogOpen(false)}
+              disabled={isBulkDeleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleBulkDelete}
+              disabled={isBulkDeleting}
+            >
+              {isBulkDeleting ? `Deleting...` : `Delete ${selectedRowCount} ${isRedis ? 'key' : 'row'}${selectedRowCount > 1 ? 's' : ''}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -623,6 +751,7 @@ export function DataViewer() {
     activeDataTabId,
     setActiveDataTab,
     removeDataTab,
+    clearAllDataTabs,
   } = useStudioStore();
 
   const isRedis = activeConnection?.type === 'redis';
@@ -635,49 +764,60 @@ export function DataViewer() {
       <div className="flex flex-col h-full overflow-hidden bg-background relative">
         {/* Data tabs bar - show when there are any tabs */}
         {dataTabs.length > 0 && (
-          <div className="flex items-center border-b bg-muted/20 shrink-0 overflow-x-auto">
-            {dataTabs.map((tab) => (
-              <div
-                key={tab.id}
-                className={cn(
-                  'flex items-center border-r border-border/30 transition-colors',
-                  activeDataTabId === tab.id
-                    ? 'bg-background border-b-2 border-b-primary'
-                    : 'hover:bg-muted/30'
-                )}
-              >
-                <button
-                  onClick={() => {
-                    setActiveDataTab(tab.id);
-                    if (!tab.filter) {
-                      setSelectedTable(tab.tableName);
-                    }
-                  }}
+          <div className="flex items-center border-b bg-muted/20 shrink-0">
+            <div className="flex items-center overflow-x-auto flex-1 min-w-0">
+              {dataTabs.map((tab) => (
+                <div
+                  key={tab.id}
                   className={cn(
-                    'flex items-center gap-1.5 px-3 py-2 text-sm whitespace-nowrap',
+                    'flex items-center border-r border-border/30 transition-colors',
                     activeDataTabId === tab.id
-                      ? 'text-foreground font-medium'
-                      : 'text-muted-foreground hover:text-foreground'
+                      ? 'bg-background border-b-2 border-b-primary'
+                      : 'hover:bg-muted/30'
                   )}
                 >
-                  <span className="max-w-40 truncate">{tab.tableName}</span>
-                  {tab.filter && (
-                    <span className="text-xs text-primary bg-primary/10 px-1.5 py-0.5 rounded">
-                      {tab.filter.column}={String(tab.filter.value)}
-                    </span>
-                  )}
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeDataTab(tab.id);
-                  }}
-                  className="p-1 mr-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
+                  <button
+                    onClick={() => {
+                      setActiveDataTab(tab.id);
+                      if (!tab.filter) {
+                        setSelectedTable(tab.tableName);
+                      }
+                    }}
+                    className={cn(
+                      'flex items-center gap-1.5 px-3 py-2 text-sm whitespace-nowrap',
+                      activeDataTabId === tab.id
+                        ? 'text-foreground font-medium'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    <span className="max-w-40 truncate">{tab.tableName}</span>
+                    {tab.filter && (
+                      <span className="text-xs text-primary bg-primary/10 px-1.5 py-0.5 rounded">
+                        {tab.filter.column}={String(tab.filter.value)}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeDataTab(tab.id);
+                    }}
+                    className="p-1 mr-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+            {dataTabs.length >= 2 && (
+              <button
+                onClick={clearAllDataTabs}
+                className="px-2 py-2 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                title="Close all tabs"
+              >
+                <XCircle className="h-4 w-4" />
+              </button>
+            )}
           </div>
         )}
 

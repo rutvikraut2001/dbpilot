@@ -138,20 +138,36 @@ export function EditSingleFieldDialog({
     setIsSaving(true);
 
     try {
-      const updateData: RowData = { ...row };
-      if (isNull) {
-        updateData[columnName] = null;
-      } else {
-        let val = value;
-        if (typeof val === 'string') {
+      let val = isNull ? null : value;
+
+      if (!isNull) {
+        // For booleans, ensure we send a proper boolean
+        if (isBool) {
+          val = val === true || val === 'true';
+        }
+        // For JSON fields, validate JSON before sending
+        else if (isJson && typeof val === 'string') {
+          const trimmed = (val as string).trim();
+          try {
+            val = JSON.parse(trimmed);
+          } catch {
+            toast.error('Invalid JSON', { description: 'Please enter valid JSON' });
+            setIsSaving(false);
+            return;
+          }
+        }
+        // For other string fields, try JSON parse if looks like JSON
+        else if (typeof val === 'string') {
           const trimmed = val.trim();
           if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
               (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
             try { val = JSON.parse(trimmed); } catch { /* keep string */ }
           }
         }
-        updateData[columnName] = val;
       }
+
+      // Send only the changed field, not the entire row
+      const updateData: RowData = { [columnName]: val };
 
       const response = await fetch('/api/data', {
         method: 'PUT',
@@ -342,7 +358,28 @@ export function EditRowDialog({
           updateData[key] = null;
         } else {
           let value = formData[key];
-          if (typeof value === 'string') {
+          const col = columns.find((c) => c.name === key);
+          const colType = col?.type.toLowerCase() || '';
+
+          // For booleans, ensure we send a proper boolean
+          if (isBooleanType(colType)) {
+            value = value === true || value === 'true';
+          }
+          // For JSON fields, validate and parse
+          else if (isJsonType(colType) || (typeof value === 'object' && value !== null)) {
+            if (typeof value === 'string') {
+              const trimmed = value.trim();
+              try {
+                value = JSON.parse(trimmed);
+              } catch {
+                toast.error('Invalid JSON', { description: `Field "${key}" contains invalid JSON` });
+                setIsSaving(false);
+                return;
+              }
+            }
+          }
+          // For other string fields, try JSON parse if looks like JSON
+          else if (typeof value === 'string') {
             const trimmed = value.trim();
             if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
                 (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
@@ -394,9 +431,22 @@ export function EditRowDialog({
   const editableColumns = columns.filter((col) => !col.isPrimaryKey);
   const hasPKs = pkColumns.length > 0;
 
-  // Dynamic size based on column count
+  // Dynamic size and grid layout based on column count
   const colCount = editableColumns.length;
-  const sizeClass = colCount <= 6 ? 'max-w-2xl' : colCount <= 12 ? 'max-w-3xl' : 'max-w-4xl';
+  const sizeClass = colCount <= 4
+    ? 'max-w-lg'
+    : colCount <= 8
+      ? 'max-w-2xl'
+      : colCount <= 14
+        ? 'max-w-4xl'
+        : colCount <= 20
+          ? 'max-w-5xl'
+          : 'max-w-6xl';
+  const gridClass = colCount <= 4
+    ? 'grid-cols-1'
+    : colCount <= 12
+      ? 'grid-cols-1 md:grid-cols-2'
+      : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3';
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -426,7 +476,7 @@ export function EditRowDialog({
         )}
 
         <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
+          <div className={`grid ${gridClass} gap-x-6 gap-y-4`}>
             {editableColumns.map((col) => {
               const colType = col.type.toLowerCase();
               const isNull = nullFields.has(col.name);

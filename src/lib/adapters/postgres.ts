@@ -357,8 +357,16 @@ export class PostgresAdapter extends BaseAdapter {
       const val = data[col];
       if (val === null || val === undefined) return val;
       const dtype = (colTypes[col] || "").toLowerCase();
-      if ((dtype === "json" || dtype === "jsonb") && typeof val === "object") {
-        return JSON.stringify(val);
+      // Handle boolean columns: convert string "true"/"false" to actual boolean
+      if (dtype === "boolean" && typeof val === "string") {
+        return val.toLowerCase() === "true";
+      }
+      // Handle JSON/JSONB columns
+      if (dtype === "json" || dtype === "jsonb") {
+        if (typeof val === "object") return JSON.stringify(val);
+        if (typeof val === "string") {
+          try { JSON.parse(val); return val; } catch { /* pass through */ }
+        }
       }
       return val;
     });
@@ -400,12 +408,20 @@ export class PostgresAdapter extends BaseAdapter {
       colTypes[row.column_name] = row.data_type;
     }
 
-    // Serialize object/array values for json/jsonb columns
+    // Serialize values based on column type
     const serializeValue = (col: string, val: unknown): unknown => {
       if (val === null || val === undefined) return val;
       const dtype = (colTypes[col] || "").toLowerCase();
-      if ((dtype === "json" || dtype === "jsonb") && typeof val === "object") {
-        return JSON.stringify(val);
+      // Handle boolean columns: convert string "true"/"false" to actual boolean
+      if (dtype === "boolean" && typeof val === "string") {
+        return val.toLowerCase() === "true";
+      }
+      // Handle JSON/JSONB columns
+      if (dtype === "json" || dtype === "jsonb") {
+        if (typeof val === "object") return JSON.stringify(val);
+        if (typeof val === "string") {
+          try { JSON.parse(val); return val; } catch { /* pass through */ }
+        }
       }
       return val;
     };

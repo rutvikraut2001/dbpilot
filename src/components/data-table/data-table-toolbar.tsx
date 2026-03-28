@@ -6,6 +6,7 @@ import {
   Filter,
   Flame,
   Pencil,
+  Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -22,9 +23,11 @@ interface DataTableToolbarProps {
   isLoading: boolean;
   readOnlyMode: boolean;
   filter?: { column: string; value: unknown };
+  selectedCount?: number;
   onRefresh: () => void;
   onExportCSV: () => void;
   onFlushAll?: () => void;
+  onBulkDelete?: () => void;
 }
 
 export function DataTableToolbar({
@@ -34,9 +37,11 @@ export function DataTableToolbar({
   isLoading,
   readOnlyMode,
   filter,
+  selectedCount = 0,
   onRefresh,
   onExportCSV,
   onFlushAll,
+  onBulkDelete,
 }: DataTableToolbarProps) {
   const canEdit = !readOnlyMode && !isRedis;
 
@@ -71,6 +76,18 @@ export function DataTableToolbar({
               <p>Click the edit button or double-click any row to edit</p>
             </TooltipContent>
           </Tooltip>
+        )}
+
+        {selectedCount > 0 && onBulkDelete && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onBulkDelete}
+            className="h-8 text-destructive hover:text-destructive hover:bg-destructive/10 border-destructive/30"
+          >
+            <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+            Delete ({selectedCount})
+          </Button>
         )}
 
         {isRedis && !readOnlyMode && onFlushAll && (

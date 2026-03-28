@@ -64,6 +64,7 @@ interface StudioState {
   openTableTab: (tableName: string) => string;
   addDataTab: (tableName: string, filter?: { column: string; value: unknown }) => string;
   removeDataTab: (id: string) => void;
+  clearAllDataTabs: () => void;
   setActiveDataTab: (id: string) => void;
 
   // Query tab actions
@@ -195,6 +196,14 @@ export const useStudioStore = create<StudioState>()((set, get) => ({
       dataTabs: newTabs,
       activeDataTabId: newActiveId,
       selectedTable: newSelectedTable,
+    });
+  },
+
+  clearAllDataTabs: () => {
+    set({
+      dataTabs: [],
+      activeDataTabId: null,
+      selectedTable: null,
     });
   },
 

@@ -79,7 +79,14 @@ async function testWithStrategies(
   for (const strategy of strategies) {
     try {
       const adapter = createAdapter(type, strategy.connectionString);
-      const result = await adapter.testConnection();
+
+      // Wrap in a timeout to prevent hanging on DNS resolution or slow hosts
+      const result = await Promise.race([
+        adapter.testConnection(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Connection timeout after 10s (${strategy.label})`)), 10000)
+        ),
+      ]);
 
       if (result.success) {
         const switched = strategy.connectionString !== connectionString;

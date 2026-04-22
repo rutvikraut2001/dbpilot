@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { TableInfo, ColumnInfo, QueryResult } from '../adapters/types';
 
-export type TabType = 'data' | 'schema' | 'query' | 'analytics';
+export type TabType = 'data' | 'schema' | 'query' | 'api' | 'analytics';
 
 export interface DataTab {
   id: string;

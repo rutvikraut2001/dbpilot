@@ -55,6 +55,35 @@ export const QueryExecuteSchema = z.object({
   query: z.string().min(1, "Query required").max(100000, "Query too long"),
 });
 
+const HttpMethodSchema = z.enum([
+  "GET",
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+  "HEAD",
+  "OPTIONS",
+]);
+
+const HttpUrlSchema = z
+  .string()
+  .min(1, "URL required")
+  .max(4096, "URL too long")
+  .refine((val) => /^https?:\/\//i.test(val), "Only http(s) URLs are allowed");
+
+export const HttpProxyRequestSchema = z.object({
+  method: HttpMethodSchema,
+  url: HttpUrlSchema,
+  headers: z.record(z.string().max(256), z.string().max(8192)).optional(),
+  body: z.string().max(10 * 1024 * 1024).optional(), // 10 MB request body cap
+  bodyBase64: z.string().max(15 * 1024 * 1024).optional(),
+  timeoutMs: z.number().int().positive().max(600_000).optional(),
+  followRedirects: z.boolean().optional(),
+  rewriteDockerHost: z.boolean().optional(),
+});
+
+export type HttpProxyRequest = z.infer<typeof HttpProxyRequestSchema>;
+
 /**
  * Sanitize error messages to prevent information leakage.
  * Strips credentials, paths, and other sensitive data.

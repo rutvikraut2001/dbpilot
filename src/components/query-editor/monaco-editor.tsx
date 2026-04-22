@@ -8,12 +8,13 @@ import 'monaco-editor/min/vs/editor/editor.main.css';
 
 interface MonacoEditorProps {
   value: string;
-  onChange: (value: string | undefined) => void;
+  onChange?: (value: string | undefined) => void;
   language: string;
+  readOnly?: boolean;
 }
 
 // Simple Monaco editor without workers (works reliably with any bundler)
-export function MonacoEditor({ value, onChange, language }: MonacoEditorProps) {
+export function MonacoEditor({ value, onChange, language, readOnly }: MonacoEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<unknown>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -62,10 +63,11 @@ export function MonacoEditor({ value, onChange, language }: MonacoEditorProps) {
       wordWrap: 'on',
       automaticLayout: true,
       tabSize: 2,
+      readOnly: readOnly ?? false,
     });
 
     editor.onDidChangeModelContent(() => {
-      onChange(editor.getValue());
+      onChange?.(editor.getValue());
     });
 
     editorRef.current = editor;
@@ -94,6 +96,13 @@ export function MonacoEditor({ value, onChange, language }: MonacoEditorProps) {
       monaco.editor.setModelLanguage(model, language);
     }
   }, [language, monaco]);
+
+  // Update readOnly when it changes
+  useEffect(() => {
+    if (!editorRef.current || !monaco) return;
+    const editor = editorRef.current as ReturnType<typeof monaco.editor.create>;
+    editor.updateOptions({ readOnly: readOnly ?? false });
+  }, [readOnly, monaco]);
 
   const handleRetry = useCallback(() => {
     window.location.reload();

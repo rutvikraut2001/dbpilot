@@ -15,7 +15,9 @@ export type AuditAction =
   | "data.update"
   | "data.delete"
   | "redis.flush"
-  | "settings.change";
+  | "settings.change"
+  | "api.test.execute"
+  | "api.collection.import";
 
 interface AuditEntry {
   timestamp: string;

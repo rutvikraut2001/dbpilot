@@ -99,6 +99,14 @@ const FEATURES = [
     color: "text-pink-500",
     bg: "bg-pink-500/10",
   },
+  {
+    icon: Send,
+    title: "API Testing",
+    description:
+      "Built-in Postman/Bruno-style client. Collections, environments, importers, and a novel Flow Graph view.",
+    color: "text-[var(--color-api-mid)]",
+    bg: "bg-[var(--color-api-mid)]/10",
+  },
 ];
 
 const DB_BADGES = [
@@ -123,7 +131,7 @@ const DB_BADGES = [
 ];
 
 const leftFeatures = FEATURES.slice(0, 3);
-const rightFeatures = FEATURES.slice(3, 6);
+const rightFeatures = FEATURES.slice(3);
 
 export default function Home() {
   const router = useRouter();
@@ -535,6 +543,19 @@ export default function Home() {
                   <ConnectionForm onConnected={() => router.push("/studio")} />
                 </CardContent>
               </Card>
+
+              <div className="mt-4 text-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => router.push("/api-studio")}
+                  className="api-border hover:bg-[var(--color-api-start)]/10"
+                >
+                  <Send className="h-3.5 w-3.5 mr-1.5 text-[var(--color-api-mid)]" />
+                  Open <span className="api-text font-semibold mx-1">API Studio</span>
+                  <span className="text-muted-foreground">— no connection needed</span>
+                </Button>
+              </div>
             </div>
 
             {/* Right features - floating clouds */}

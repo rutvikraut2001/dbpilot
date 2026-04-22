@@ -1,5 +1,39 @@
-const LOCALHOST_VARIANTS = ['localhost', '127.0.0.1', '::1'];
-const DOCKER_HOST = 'host.docker.internal';
+export const LOCALHOST_VARIANTS = ['localhost', '127.0.0.1', '::1'];
+export const DOCKER_HOST = 'host.docker.internal';
+
+/**
+ * Return the Docker-friendly equivalent of a hostname, or null if no rewrite applies.
+ * - localhost / 127.0.0.1 / ::1  →  host.docker.internal
+ * - host.docker.internal         →  localhost (reverse direction)
+ * - anything else                →  null
+ *
+ * Pure hostname-only helper. Use alongside `getAlternateConnectionString` for
+ * full connection-string rewrites, or directly against a URL's `hostname`.
+ */
+export function alternateHost(hostname: string): string | null {
+  if (LOCALHOST_VARIANTS.includes(hostname)) return DOCKER_HOST;
+  if (hostname === DOCKER_HOST) return 'localhost';
+  return null;
+}
+
+/**
+ * Rewrite an http(s) URL's hostname from localhost → host.docker.internal.
+ * Only applies when the hostname is a localhost variant. Returns the rewritten
+ * URL string plus the original hostname for audit/reporting. Returns null if
+ * no rewrite is appropriate (remote host, or unparseable URL).
+ */
+export function rewriteHttpUrlForDockerHost(url: string): { url: string; from: string; to: string } | null {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    if (!LOCALHOST_VARIANTS.includes(u.hostname)) return null;
+    const from = u.hostname;
+    u.hostname = DOCKER_HOST;
+    return { url: u.toString(), from, to: DOCKER_HOST };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Parse the URL from a connection string safely.

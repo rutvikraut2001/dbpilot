@@ -8,6 +8,7 @@ import {
   Table2,
   Code2,
   GitBranch,
+  Send,
   LogOut,
   Shield,
   ShieldOff,
@@ -38,6 +39,7 @@ import { TableBrowser } from '@/components/sidebar/table-browser';
 import { DataViewer } from '@/components/data-table/data-viewer';
 import { QueryEditor } from '@/components/query-editor/query-editor';
 import { SchemaViewer } from '@/components/schema-viewer/schema-viewer';
+import { ApiStudioWorkspace } from '@/components/api-studio/workspace';
 import { DatabaseSwitcher } from '@/components/connection/database-switcher';
 import {
   useConnectionStore,
@@ -360,8 +362,8 @@ export default function StudioPage() {
           child components (TableBrowser, DataViewer, etc.) when switching DBs,
           guaranteeing fresh useEffect fetches with the correct connection. */}
       <div key={activeConnection.id} className="flex-1 flex overflow-hidden">
-        {/* Sidebar - resizable */}
-        {sidebarOpen && (
+        {/* Sidebar - resizable (hidden on API tab — API Studio ships its own sidebar) */}
+        {sidebarOpen && activeTab !== 'api' && (
           <div
             ref={sidebarRef}
             className="h-full overflow-hidden shrink-0 relative flex"
@@ -413,6 +415,13 @@ export default function StudioPage() {
                     Schema
                   </TabsTrigger>
                 )}
+                <TabsTrigger
+                  value="api"
+                  className="px-4 h-9 data-[state=active]:bg-muted rounded-none border-b-2 border-transparent data-[state=active]:border-[var(--color-api-mid)]"
+                >
+                  <Send className="h-4 w-4 mr-2 text-[var(--color-api-mid)]" />
+                  API
+                </TabsTrigger>
               </TabsList>
             </Tabs>
 
@@ -465,6 +474,7 @@ export default function StudioPage() {
             {activeTab === 'data' && <DataViewer />}
             {activeTab === 'query' && <QueryEditor />}
             {activeTab === 'schema' && <SchemaViewer />}
+            {activeTab === 'api' && <ApiStudioWorkspace />}
           </div>
         </div>
       </div>

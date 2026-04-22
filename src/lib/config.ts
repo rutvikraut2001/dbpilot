@@ -21,6 +21,12 @@ export const config = {
   // Audit logging
   auditLogEnabled: process.env.AUDIT_LOG_ENABLED !== "false", // Enabled by default
   auditLogMaxEntries: parseInt(process.env.AUDIT_LOG_MAX_ENTRIES || "1000"),
+
+  // HTTP proxy (API Studio)
+  httpProxyMaxTimeoutMs: parseInt(process.env.API_STUDIO_MAX_TIMEOUT_MS || "60000"),
+  httpProxyMaxResponseBytes: parseInt(
+    process.env.API_STUDIO_MAX_RESPONSE_BYTES || String(25 * 1024 * 1024),
+  ),
 } as const;
 
 /**

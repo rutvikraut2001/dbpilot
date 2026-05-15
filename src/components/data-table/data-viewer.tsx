@@ -39,17 +39,310 @@ import { DataTablePagination } from './data-table-pagination';
 
 type RowData = Record<string, unknown>;
 
+const SKELETON_ROW_KEYS = ['sk-row-0', 'sk-row-1', 'sk-row-2', 'sk-row-3', 'sk-row-4'] as const;
+const SKELETON_CELL_KEYS = ['sk-cell-0', 'sk-cell-1', 'sk-cell-2', 'sk-cell-3', 'sk-cell-4', 'sk-cell-5'] as const;
+
+const REDIS_COLUMN_SIZES: Record<string, number> = {
+  key: 280,
+  value: 450,
+  type: 100,
+  ttl: 130,
+};
+
+function getColumnSize(isRedis: boolean, key: string): number {
+  if (!isRedis) return 150;
+  return REDIS_COLUMN_SIZES[key] ?? 120;
+}
+
+function toCsvString(val: unknown): string {
+  if (typeof val === 'object') return JSON.stringify(val);
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number' || typeof val === 'boolean' || typeof val === 'bigint') {
+    return String(val);
+  }
+  return '';
+}
+
+function csvEscape(val: unknown): string {
+  if (val === null || val === undefined) return '';
+  const str = toCsvString(val);
+  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+    return `"${str.replaceAll('"', '""')}"`;
+  }
+  return str;
+}
+
+function getRowBgClass(isSelected: boolean, rowIndex: number): string {
+  if (isSelected) return 'bg-primary/10 hover:bg-primary/15';
+  if (rowIndex % 2 === 0) return 'bg-background hover:bg-muted/30';
+  return 'bg-muted/20 hover:bg-muted/40';
+}
+
+function pluralize(count: number, singular: string): string {
+  return count > 1 ? `${singular}s` : singular;
+}
+
+function displayRowKey(key: unknown): string {
+  if (key === null || key === undefined) return '';
+  if (typeof key === 'object') return JSON.stringify(key);
+  if (typeof key === 'string') return key;
+  if (typeof key === 'number' || typeof key === 'boolean' || typeof key === 'bigint') {
+    return String(key);
+  }
+  return '';
+}
+
+interface CellContentProps {
+  isSelectCol: boolean;
+  isRedis: boolean;
+  cell: import('@tanstack/react-table').Cell<RowData, unknown>;
+  columnId: string;
+  value: unknown;
+  fkRef: { table: string; column: string } | undefined;
+  isForeignKey: boolean | undefined;
+  onFKClick: (() => void) | undefined;
+}
+
+interface DataCellProps {
+  cell: import('@tanstack/react-table').Cell<RowData, unknown>;
+  rowOriginal: RowData;
+  isRedis: boolean;
+  canEdit: boolean;
+  fkLookup: Record<string, { isForeignKey: boolean; foreignKeyRef?: { table: string; column: string } }>;
+  onEditField: (row: RowData, field: string) => void;
+  onFKClick: (ref: { table: string; column: string }, value: unknown) => void;
+}
+
+function DataCell({
+  cell,
+  rowOriginal,
+  isRedis,
+  canEdit,
+  fkLookup,
+  onEditField,
+  onFKClick,
+}: Readonly<DataCellProps>) {
+  const columnId = cell.column.id;
+  const isSelectCol = columnId === 'select';
+  const value = cell.getValue();
+  const fkInfo = fkLookup[columnId];
+  const fkRef = fkInfo?.foreignKeyRef;
+  const handleDoubleClick = () => {
+    if (canEdit && !isSelectCol) onEditField(rowOriginal, columnId);
+  };
+  const handleFKClick = fkRef ? () => onFKClick(fkRef, value) : undefined;
+
+  return (
+    <td
+      className={cn(
+        'px-4 py-2 border-r border-border/30 relative',
+        canEdit && !isSelectCol && 'cursor-pointer',
+        isSelectCol && 'sticky left-0 z-1 px-3 bg-inherit'
+      )}
+      style={{ width: cell.column.getSize() }}
+      onDoubleClick={handleDoubleClick}
+    >
+      <CellContent
+        isSelectCol={isSelectCol}
+        isRedis={isRedis}
+        cell={cell}
+        columnId={columnId}
+        value={value}
+        fkRef={fkRef}
+        isForeignKey={fkInfo?.isForeignKey}
+        onFKClick={handleFKClick}
+      />
+    </td>
+  );
+}
+
+interface DataRowProps {
+  row: import('@tanstack/react-table').Row<RowData>;
+  rowIndex: number;
+  isRedis: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+  fkLookup: Record<string, { isForeignKey: boolean; foreignKeyRef?: { table: string; column: string } }>;
+  onEditField: (row: RowData, field: string) => void;
+  onEditRow: (row: RowData) => void;
+  onDeleteRow: (row: RowData) => void;
+  onFKClick: (ref: { table: string; column: string }, value: unknown) => void;
+}
+
+function DataRow({
+  row,
+  rowIndex,
+  isRedis,
+  canEdit,
+  canDelete,
+  fkLookup,
+  onEditField,
+  onEditRow,
+  onDeleteRow,
+  onFKClick,
+}: Readonly<DataRowProps>) {
+  const isSelected = row.getIsSelected();
+  const handleEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onEditRow(row.original);
+  };
+  const handleDelete = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onDeleteRow(row.original);
+  };
+  return (
+    <tr className={cn('border-b border-border/30 transition-colors group', getRowBgClass(isSelected, rowIndex))}>
+      {row.getVisibleCells().map((cell) => (
+        <DataCell
+          key={cell.id}
+          cell={cell}
+          rowOriginal={row.original}
+          isRedis={isRedis}
+          canEdit={canEdit}
+          fkLookup={fkLookup}
+          onEditField={onEditField}
+          onFKClick={onFKClick}
+        />
+      ))}
+      {(canEdit || canDelete) && (
+        <td className="w-20 px-2 py-2">
+          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {canEdit && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 hover:bg-primary/10 text-muted-foreground/50 hover:text-primary"
+                onClick={handleEdit}
+                aria-label="Edit row"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </Button>
+            )}
+            {canDelete && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 hover:bg-destructive/10 text-muted-foreground/50 hover:text-destructive"
+                onClick={handleDelete}
+                aria-label="Delete row"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
+        </td>
+      )}
+    </tr>
+  );
+}
+
+function CellContent({
+  isSelectCol,
+  isRedis,
+  cell,
+  columnId,
+  value,
+  fkRef,
+  isForeignKey,
+  onFKClick,
+}: Readonly<CellContentProps>) {
+  if (isSelectCol) {
+    return flexRender(cell.column.columnDef.cell, cell.getContext());
+  }
+  if (isRedis) {
+    return <RedisCellDisplay columnId={columnId} value={value} />;
+  }
+  return (
+    <SmartCellDisplay
+      value={value}
+      isForeignKey={isForeignKey}
+      foreignKeyRef={fkRef}
+      onFKClick={onFKClick}
+    />
+  );
+}
+
+function SelectAllHeader({ table: t }: Readonly<{ table: { getIsAllPageRowsSelected: () => boolean; getToggleAllPageRowsSelectedHandler: () => (e: unknown) => void } }>) {
+  return (
+    <input
+      type="checkbox"
+      checked={t.getIsAllPageRowsSelected()}
+      onChange={t.getToggleAllPageRowsSelectedHandler()}
+      className="h-3.5 w-3.5 rounded accent-primary cursor-pointer"
+      aria-label="Select all rows on page"
+    />
+  );
+}
+
+function SelectRowCell({ row: r }: Readonly<{ row: { getIsSelected: () => boolean; getToggleSelectedHandler: () => (e: unknown) => void } }>) {
+  return (
+    <input
+      type="checkbox"
+      checked={r.getIsSelected()}
+      onChange={r.getToggleSelectedHandler()}
+      onClick={(e) => e.stopPropagation()}
+      className="h-3.5 w-3.5 rounded accent-primary cursor-pointer"
+      aria-label="Select row"
+    />
+  );
+}
+
+function SortableHeader({
+  columnKey,
+  sortBy,
+  sortOrder,
+  onSort,
+}: Readonly<{
+  columnKey: string;
+  sortBy: string | undefined;
+  sortOrder: 'asc' | 'desc';
+  onSort: () => void;
+}>) {
+  return (
+    <button
+      type="button"
+      onClick={onSort}
+      className="flex items-center gap-1.5 font-semibold text-sm hover:text-primary transition-colors text-left w-full"
+    >
+      <span className="truncate">{columnKey}</span>
+      {sortBy === columnKey && (
+        <span className="text-primary shrink-0">
+          {sortOrder === 'asc' ? '↑' : '↓'}
+        </span>
+      )}
+    </button>
+  );
+}
+
+interface TableMeta {
+  sortBy: string | undefined;
+  sortOrder: 'asc' | 'desc';
+  onSort: (key: string) => void;
+}
+
+function ColumnHeader({ column, table }: import('@tanstack/react-table').HeaderContext<RowData, unknown>) {
+  const meta = table.options.meta as TableMeta;
+  return (
+    <SortableHeader
+      columnKey={column.id}
+      sortBy={meta.sortBy}
+      sortOrder={meta.sortOrder}
+      onSort={() => meta.onSort(column.id)}
+    />
+  );
+}
+
 // Inner table component that renders data for a specific table/filter
 function DataTable({
   tableName,
   filter,
-}: {
+}: Readonly<{
   tableName: string;
   filter?: { column: string; value: unknown };
-}) {
+}>) {
   const activeConnection = useActiveConnection();
   const readOnlyMode = useReadOnlyMode();
-  const { tableSchema, addDataTab } = useStudioStore();
+  const { tableSchema, addDataTab, setTableSchema, setIsLoadingSchema } = useStudioStore();
 
   const isRedis = activeConnection?.type === 'redis';
 
@@ -131,6 +424,36 @@ function DataTable({
     fetchData();
   }, [fetchData]);
 
+  // Reset edit/delete dialogs when switching tables so stale data
+  // from a previous table can't bleed into the new table's UI.
+  useEffect(() => {
+    setEditDrawerOpen(false);
+    setEditingRowData(null);
+    setEditingField(null);
+    setDeleteDialogOpen(false);
+    setRowToDelete(null);
+  }, [tableName, activeConnection?.id]);
+
+  // Refetch schema whenever the active table changes. The sidebar only fetches
+  // when a sidebar item is clicked, so switching between already-open tabs
+  // would otherwise leave tableSchema stale (showing the previous table's
+  // columns/PKs in the edit dialog).
+  useEffect(() => {
+    const connectionId = activeConnection?.id;
+    if (!connectionId || !tableName) return;
+    let cancelled = false;
+    setTableSchema([]);
+    setIsLoadingSchema(true);
+    fetch(`/api/schema?connectionId=${connectionId}&table=${encodeURIComponent(tableName)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled && !data.error) setTableSchema(data.schema);
+      })
+      .catch(() => { /* silent — toolbar shows stale state */ })
+      .finally(() => { if (!cancelled) setIsLoadingSchema(false); });
+    return () => { cancelled = true; };
+  }, [tableName, activeConnection?.id, setTableSchema, setIsLoadingSchema]);
+
   // Build FK lookup from tableSchema
   const fkLookup = useMemo(() => {
     const map: Record<
@@ -186,6 +509,22 @@ function DataTable({
     },
     [addDataTab]
   );
+
+  const handleEditField = useCallback((rowData: RowData, field: string) => {
+    setEditingRowData(rowData);
+    setEditingField(field);
+  }, []);
+
+  const handleEditRow = useCallback((rowData: RowData) => {
+    setEditingRowData(rowData);
+    setEditingField(null);
+    setEditDrawerOpen(true);
+  }, []);
+
+  const handleDeleteRowRequest = useCallback((rowData: RowData) => {
+    setRowToDelete(rowData);
+    setDeleteDialogOpen(true);
+  }, []);
 
   const handleDeleteRow = async () => {
     if (!rowToDelete || !activeConnection) return;
@@ -251,7 +590,7 @@ function DataTable({
     setRowSelection({});
 
     if (failCount === 0) {
-      toast.success(`${successCount} ${isRedis ? 'key' : 'row'}${successCount > 1 ? 's' : ''} deleted`);
+      toast.success(`${successCount} ${pluralize(successCount, isRedis ? 'key' : 'row')} deleted`);
     } else {
       toast.error(`Deleted ${successCount}, failed ${failCount}`);
     }
@@ -296,19 +635,7 @@ function DataTable({
     const headers = Object.keys(data[0]);
     const csvContent = [
       headers.join(','),
-      ...data.map((row) =>
-        headers
-          .map((h) => {
-            const val = row[h];
-            if (val === null || val === undefined) return '';
-            const str =
-              typeof val === 'object' ? JSON.stringify(val) : String(val);
-            return str.includes(',') || str.includes('"') || str.includes('\n')
-              ? `"${str.replace(/"/g, '""')}"`
-              : str;
-          })
-          .join(',')
-      ),
+      ...data.map((row) => headers.map((h) => csvEscape(row[h])).join(',')),
     ].join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv' });
@@ -320,32 +647,25 @@ function DataTable({
     URL.revokeObjectURL(url);
   };
 
+  const handleSortColumn = useCallback((key: string) => {
+    if (sortBy === key) {
+      setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(key);
+      setSortOrder('asc');
+    }
+  }, [sortBy]);
+
   const columns: ColumnDef<RowData, unknown>[] = useMemo(() => {
     if (data.length === 0) return [];
 
     const cols: ColumnDef<RowData, unknown>[] = [];
 
-    // Checkbox selection column (only when not read-only)
     if (canDelete) {
       cols.push({
         id: 'select',
-        header: ({ table: t }) => (
-          <input
-            type="checkbox"
-            checked={t.getIsAllPageRowsSelected()}
-            onChange={t.getToggleAllPageRowsSelectedHandler()}
-            className="h-3.5 w-3.5 rounded accent-primary cursor-pointer"
-          />
-        ),
-        cell: ({ row: r }) => (
-          <input
-            type="checkbox"
-            checked={r.getIsSelected()}
-            onChange={r.getToggleSelectedHandler()}
-            onClick={(e) => e.stopPropagation()}
-            className="h-3.5 w-3.5 rounded accent-primary cursor-pointer"
-          />
-        ),
+        header: SelectAllHeader,
+        cell: SelectRowCell,
         size: 40,
         minSize: 40,
         maxSize: 40,
@@ -355,36 +675,15 @@ function DataTable({
 
     const dataCols: ColumnDef<RowData, unknown>[] = Object.keys(data[0]).map((key) => ({
       accessorKey: key,
-      header: () => (
-        <button
-          onClick={() => {
-            if (sortBy === key) {
-              setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-            } else {
-              setSortBy(key);
-              setSortOrder('asc');
-            }
-          }}
-          className="flex items-center gap-1.5 font-semibold text-sm hover:text-primary transition-colors text-left w-full"
-        >
-          <span className="truncate">{key}</span>
-          {sortBy === key && (
-            <span className="text-primary shrink-0">
-              {sortOrder === 'asc' ? '↑' : '↓'}
-            </span>
-          )}
-        </button>
-      ),
-      size: isRedis
-        ? (key === 'key' ? 280 : key === 'value' ? 450 : key === 'type' ? 100 : key === 'ttl' ? 130 : 120)
-        : 150,
+      header: ColumnHeader,
+      size: getColumnSize(isRedis, key),
       minSize: 60,
       maxSize: isRedis && key === 'value' ? 1000 : 600,
     }));
 
     cols.push(...dataCols);
     return cols;
-  }, [data, sortBy, sortOrder, isRedis, canDelete]);
+  }, [data, isRedis, canDelete]);
 
   const table = useReactTable({
     data,
@@ -398,6 +697,11 @@ function DataTable({
       columnSizing,
       rowSelection,
     },
+    meta: {
+      sortBy,
+      sortOrder,
+      onSort: handleSortColumn,
+    } satisfies TableMeta,
   });
 
 
@@ -434,7 +738,7 @@ function DataTable({
                     key={header.id}
                     className={cn(
                       'relative text-left px-4 py-3 border-b border-r border-border/50 bg-muted/80 first:border-l-0',
-                      header.column.id === 'select' && 'sticky left-0 z-[2] px-3'
+                      header.column.id === 'select' && 'sticky left-0 z-2 px-3'
                     )}
                     style={{ width: header.getSize() }}
                   >
@@ -445,17 +749,17 @@ function DataTable({
                           header.getContext()
                         )}
                     {header.column.getCanResize() && (
-                      <div
+                      <button
+                        type="button"
+                        aria-label="Resize column"
                         onMouseDown={header.getResizeHandler()}
                         onTouchStart={header.getResizeHandler()}
                         onDoubleClick={() => header.column.resetSize()}
                         className={cn(
-                          'absolute right-0 top-0 w-1 h-full cursor-col-resize select-none touch-none',
+                          'absolute right-0 top-0 w-1 h-full cursor-col-resize select-none touch-none p-0 border-0',
                           'hover:bg-primary/60 active:bg-primary',
                           'transition-colors duration-150',
-                          header.column.getIsResizing()
-                            ? 'bg-primary'
-                            : 'bg-border/50 hover:bg-primary/40'
+                          header.column.getIsResizing() ? 'bg-primary' : 'bg-border/50 hover:bg-primary/40'
                         )}
                         style={{ transform: 'translateX(50%)' }}
                       />
@@ -470,137 +774,56 @@ function DataTable({
             ))}
           </thead>
           <tbody>
-            {isLoading ? (
-              <tr>
-                <td
-                  colSpan={columns.length + (canEdit || canDelete ? 1 : 0)}
-                  className="h-32 text-center text-muted-foreground"
-                >
-                  <div className="space-y-3 px-4">
-                    {Array.from({ length: 5 }).map((_, i) => (
-                      <div key={i} className="flex gap-4">
-                        {Array.from({ length: Math.min(columns.length || 4, 6) }).map((_, j) => (
-                          <div
-                            key={j}
-                            className="h-6 bg-muted rounded animate-pulse flex-1"
-                          />
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                </td>
-              </tr>
-            ) : table.getRowModel().rows.length === 0 ? (
-              <tr>
-                <td
-                  colSpan={columns.length + (canEdit || canDelete ? 1 : 0)}
-                  className="h-32 text-center text-muted-foreground"
-                >
-                  No data found
-                </td>
-              </tr>
-            ) : (
-              table.getRowModel().rows.map((row, rowIndex) => {
-                const isSelected = row.getIsSelected();
+            {(() => {
+              const colSpan = columns.length + (canEdit || canDelete ? 1 : 0);
+              if (isLoading) {
                 return (
-                <tr
-                  key={row.id}
-                  className={cn(
-                    'border-b border-border/30 transition-colors group',
-                    isSelected
-                      ? 'bg-primary/10 hover:bg-primary/15'
-                      : rowIndex % 2 === 0
-                        ? 'bg-background hover:bg-muted/30'
-                        : 'bg-muted/20 hover:bg-muted/40'
-                  )}
-                >
-                  {row.getVisibleCells().map((cell) => {
-                    const columnId = cell.column.id;
-                    const isSelectCol = columnId === 'select';
-                    const value = cell.getValue();
-                    const fkInfo = fkLookup[columnId];
-                    return (
-                      <td
-                        key={cell.id}
-                        className={cn(
-                          'px-4 py-2 border-r border-border/30 relative',
-                          canEdit && !isSelectCol && 'cursor-pointer',
-                          isSelectCol && 'sticky left-0 z-[1] px-3 bg-inherit'
-                        )}
-                        style={{ width: cell.column.getSize() }}
-                        onDoubleClick={() => {
-                          if (canEdit && !isSelectCol) {
-                            setEditingRowData(row.original);
-                            setEditingField(columnId);
-                          }
-                        }}
-                      >
-                        {isSelectCol ? (
-                          flexRender(cell.column.columnDef.cell, cell.getContext())
-                        ) : isRedis ? (
-                          <RedisCellDisplay
-                            columnId={columnId}
-                            value={value}
-                          />
-                        ) : (
-                          <SmartCellDisplay
-                            value={value}
-                            isForeignKey={fkInfo?.isForeignKey}
-                            foreignKeyRef={fkInfo?.foreignKeyRef}
-                            onFKClick={
-                              fkInfo?.foreignKeyRef
-                                ? () =>
-                                    handleFKClick(
-                                      fkInfo.foreignKeyRef!,
-                                      value
-                                    )
-                                : undefined
-                            }
-                          />
-                        )}
-                      </td>
-                    );
-                  })}
-                  {/* Action column */}
-                  {(canEdit || canDelete) && (
-                    <td className="w-20 px-2 py-2">
-                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        {canEdit && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 hover:bg-primary/10 text-muted-foreground/50 hover:text-primary"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingRowData(row.original);
-                              setEditingField(null);
-                              setEditDrawerOpen(true);
-                            }}
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
-                        {canDelete && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 hover:bg-destructive/10 text-muted-foreground/50 hover:text-destructive"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setRowToDelete(row.original);
-                              setDeleteDialogOpen(true);
-                            }}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
+                  <tr>
+                    <td colSpan={colSpan} className="h-32 text-center text-muted-foreground">
+                      <div className="space-y-3 px-4">
+                        {SKELETON_ROW_KEYS.map((rowKey) => {
+                          const cellCount = Math.min(columns.length || 4, 6);
+                          return (
+                            <div key={rowKey} className="flex gap-4">
+                              {SKELETON_CELL_KEYS.slice(0, cellCount).map((cellKey) => (
+                                <div
+                                  key={`${rowKey}-${cellKey}`}
+                                  className="h-6 bg-muted rounded animate-pulse flex-1"
+                                />
+                              ))}
+                            </div>
+                          );
+                        })}
                       </div>
                     </td>
-                  )}
-                </tr>
+                  </tr>
                 );
-              })
-            )}
+              }
+              if (table.getRowModel().rows.length === 0) {
+                return (
+                  <tr>
+                    <td colSpan={colSpan} className="h-32 text-center text-muted-foreground">
+                      No data found
+                    </td>
+                  </tr>
+                );
+              }
+              return table.getRowModel().rows.map((row, rowIndex) => (
+                <DataRow
+                  key={row.id}
+                  row={row}
+                  rowIndex={rowIndex}
+                  isRedis={isRedis}
+                  canEdit={canEdit}
+                  canDelete={canDelete}
+                  fkLookup={fkLookup}
+                  onEditField={handleEditField}
+                  onEditRow={handleEditRow}
+                  onDeleteRow={handleDeleteRowRequest}
+                  onFKClick={handleFKClick}
+                />
+              ));
+            })()}
           </tbody>
         </table>
       </div>
@@ -620,6 +843,7 @@ function DataTable({
       {/* Single field edit (double-click) */}
       {editingRowData && activeConnection && editingField && (
         <EditSingleFieldDialog
+          key={`single-${tableName}-${editingField}-${JSON.stringify(editingRowData)}`}
           open={!!editingField}
           onOpenChange={(open) => {
             if (!open) {
@@ -641,6 +865,7 @@ function DataTable({
       {/* Full row edit (pencil button) */}
       {editingRowData && activeConnection && !editingField && editDrawerOpen && (
         <EditRowDialog
+          key={`row-${tableName}-${JSON.stringify(editingRowData)}`}
           open={editDrawerOpen}
           onOpenChange={(open) => {
             setEditDrawerOpen(open);
@@ -662,7 +887,7 @@ function DataTable({
             <DialogTitle>{isRedis ? 'Delete Key' : 'Delete Row'}</DialogTitle>
             <DialogDescription>
               {isRedis ? (
-                <>Are you sure you want to delete the key <strong>{String(rowToDelete?.key ?? '')}</strong>? This action cannot be undone.</>
+                <>Are you sure you want to delete the key <strong>{displayRowKey(rowToDelete?.key)}</strong>? This action cannot be undone.</>
               ) : (
                 'Are you sure you want to delete this row? This action cannot be undone.'
               )}
@@ -712,12 +937,16 @@ function DataTable({
       </Dialog>
 
       {/* Bulk Delete Confirmation Dialog */}
+      {(() => {
+        const bulkSingular = isRedis ? 'key' : 'row';
+        const bulkNoun = pluralize(selectedRowCount, bulkSingular);
+        return (
       <Dialog open={bulkDeleteDialogOpen} onOpenChange={setBulkDeleteDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete {selectedRowCount} {isRedis ? 'key' : 'row'}{selectedRowCount > 1 ? 's' : ''}</DialogTitle>
+            <DialogTitle>Delete {selectedRowCount} {bulkNoun}</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete <strong>{selectedRowCount}</strong> selected {isRedis ? 'key' : 'row'}{selectedRowCount > 1 ? 's' : ''}? This action cannot be undone.
+              Are you sure you want to delete <strong>{selectedRowCount}</strong> selected {bulkNoun}? This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -733,11 +962,13 @@ function DataTable({
               onClick={handleBulkDelete}
               disabled={isBulkDeleting}
             >
-              {isBulkDeleting ? `Deleting...` : `Delete ${selectedRowCount} ${isRedis ? 'key' : 'row'}${selectedRowCount > 1 ? 's' : ''}`}
+              {isBulkDeleting ? `Deleting...` : `Delete ${selectedRowCount} ${bulkNoun}`}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+        );
+      })()}
     </div>
   );
 }
@@ -777,6 +1008,7 @@ export function DataViewer() {
                   )}
                 >
                   <button
+                    type="button"
                     onClick={() => {
                       setActiveDataTab(tab.id);
                       if (!tab.filter) {
@@ -793,16 +1025,18 @@ export function DataViewer() {
                     <span className="max-w-40 truncate">{tab.tableName}</span>
                     {tab.filter && (
                       <span className="text-xs text-primary bg-primary/10 px-1.5 py-0.5 rounded">
-                        {tab.filter.column}={String(tab.filter.value)}
+                        {tab.filter.column}={displayRowKey(tab.filter.value)}
                       </span>
                     )}
                   </button>
                   <button
+                    type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       removeDataTab(tab.id);
                     }}
                     className="p-1 mr-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                    aria-label={`Close tab ${tab.tableName}`}
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -811,9 +1045,11 @@ export function DataViewer() {
             </div>
             {dataTabs.length >= 2 && (
               <button
+                type="button"
                 onClick={clearAllDataTabs}
                 className="px-2 py-2 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
                 title="Close all tabs"
+                aria-label="Close all tabs"
               >
                 <XCircle className="h-4 w-4" />
               </button>

@@ -31,6 +31,7 @@ import { useStudioStore } from '@/lib/stores/studio';
 import { useActiveConnection, useReadOnlyMode } from '@/lib/stores/connection';
 import { PaginatedResult } from '@/lib/adapters/types';
 import { cn } from '@/lib/utils';
+import { rowsToCsv, rowsToJson, exportFilename } from '@/lib/utils/export';
 import { toast } from 'sonner';
 import { SmartCellDisplay, RedisCellDisplay } from './cell-renderer';
 import { EditRowDialog, EditSingleFieldDialog } from './edit-row-drawer';
@@ -52,24 +53,6 @@ const REDIS_COLUMN_SIZES: Record<string, number> = {
 function getColumnSize(isRedis: boolean, key: string): number {
   if (!isRedis) return 150;
   return REDIS_COLUMN_SIZES[key] ?? 120;
-}
-
-function toCsvString(val: unknown): string {
-  if (typeof val === 'object') return JSON.stringify(val);
-  if (typeof val === 'string') return val;
-  if (typeof val === 'number' || typeof val === 'boolean' || typeof val === 'bigint') {
-    return String(val);
-  }
-  return '';
-}
-
-function csvEscape(val: unknown): string {
-  if (val === null || val === undefined) return '';
-  const str = toCsvString(val);
-  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-    return `"${str.replaceAll('"', '""')}"`;
-  }
-  return str;
 }
 
 function getRowBgClass(isSelected: boolean, rowIndex: number): string {
@@ -629,20 +612,36 @@ function DataTable({
   const canEdit = !readOnlyMode && !isRedis;
   const canDelete = !readOnlyMode;
 
-  const handleExportCSV = () => {
-    if (data.length === 0) return;
+  const handleExport = (scope: 'page' | 'full', format: 'csv' | 'json') => {
+    // Full table: stream all rows from the server via the export endpoint.
+    if (scope === 'full') {
+      if (!activeConnection) return;
+      const url = `/api/export?connectionId=${activeConnection.id}&table=${encodeURIComponent(
+        tableName
+      )}&format=${format}`;
+      const a = document.createElement('a');
+      a.href = url;
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      toast.success(`Exporting full table as ${format.toUpperCase()}…`);
+      return;
+    }
 
-    const headers = Object.keys(data[0]);
-    const csvContent = [
-      headers.join(','),
-      ...data.map((row) => headers.map((h) => csvEscape(row[h])).join(',')),
-    ].join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv' });
+    // Current page: serialize the in-memory rows client-side.
+    if (data.length === 0) {
+      toast.info('No rows to export');
+      return;
+    }
+    const content = format === 'csv' ? rowsToCsv(data) : rowsToJson(data);
+    const blob = new Blob([content], {
+      type: format === 'csv' ? 'text/csv' : 'application/json',
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${tableName}_${new Date().toISOString().split('T')[0]}.csv`;
+    a.download = exportFilename(tableName, format);
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -716,7 +715,7 @@ function DataTable({
         filter={filter}
         selectedCount={selectedRowCount}
         onRefresh={fetchData}
-        onExportCSV={handleExportCSV}
+        onExport={handleExport}
         onFlushAll={isRedis ? () => setFlushAllDialogOpen(true) : undefined}
         onBulkDelete={canDelete && selectedRowCount > 0 ? () => setBulkDeleteDialogOpen(true) : undefined}
       />

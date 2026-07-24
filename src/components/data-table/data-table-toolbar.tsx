@@ -7,6 +7,8 @@ import {
   Flame,
   Pencil,
   Trash2,
+  FileSpreadsheet,
+  FileJson,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -14,6 +16,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 
 interface DataTableToolbarProps {
@@ -25,7 +35,7 @@ interface DataTableToolbarProps {
   filter?: { column: string; value: unknown };
   selectedCount?: number;
   onRefresh: () => void;
-  onExportCSV: () => void;
+  onExport: (scope: 'page' | 'full', format: 'csv' | 'json') => void;
   onFlushAll?: () => void;
   onBulkDelete?: () => void;
 }
@@ -39,7 +49,7 @@ export function DataTableToolbar({
   filter,
   selectedCount = 0,
   onRefresh,
-  onExportCSV,
+  onExport,
   onFlushAll,
   onBulkDelete,
 }: DataTableToolbarProps) {
@@ -117,15 +127,35 @@ export function DataTableToolbar({
           />
           Refresh
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onExportCSV}
-          className="h-8"
-        >
-          <Download className="h-3.5 w-3.5 mr-1.5" />
-          Export
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="h-8">
+              <Download className="h-3.5 w-3.5 mr-1.5" />
+              Export
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuLabel>Current page</DropdownMenuLabel>
+            <DropdownMenuItem onSelect={() => onExport('page', 'csv')}>
+              <FileSpreadsheet className="h-4 w-4" />
+              CSV
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => onExport('page', 'json')}>
+              <FileJson className="h-4 w-4" />
+              JSON
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Full table</DropdownMenuLabel>
+            <DropdownMenuItem onSelect={() => onExport('full', 'csv')}>
+              <FileSpreadsheet className="h-4 w-4" />
+              CSV
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => onExport('full', 'json')}>
+              <FileJson className="h-4 w-4" />
+              JSON
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   );

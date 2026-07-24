@@ -2,6 +2,7 @@
 
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { Loader2, AlertCircle, RefreshCw } from 'lucide-react';
+import { useTheme } from 'next-themes';
 
 // Import Monaco CSS
 import 'monaco-editor/min/vs/editor/editor.main.css';
@@ -19,6 +20,8 @@ export function MonacoEditor({ value, onChange, language }: MonacoEditorProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [monaco, setMonaco] = useState<typeof import('monaco-editor') | null>(null);
+  const { resolvedTheme } = useTheme();
+  const monacoTheme = resolvedTheme === 'dark' ? 'vs-dark' : 'vs';
 
   // Load Monaco
   useEffect(() => {
@@ -54,7 +57,7 @@ export function MonacoEditor({ value, onChange, language }: MonacoEditorProps) {
     const editor = monaco.editor.create(containerRef.current, {
       value: value,
       language: language,
-      theme: 'vs-dark',
+      theme: monacoTheme,
       minimap: { enabled: false },
       fontSize: 14,
       lineNumbers: 'on',
@@ -94,6 +97,12 @@ export function MonacoEditor({ value, onChange, language }: MonacoEditorProps) {
       monaco.editor.setModelLanguage(model, language);
     }
   }, [language, monaco]);
+
+  // Follow the app light/dark theme
+  useEffect(() => {
+    if (!monaco) return;
+    monaco.editor.setTheme(monacoTheme);
+  }, [monaco, monacoTheme]);
 
   const handleRetry = useCallback(() => {
     window.location.reload();

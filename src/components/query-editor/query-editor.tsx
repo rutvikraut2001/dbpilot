@@ -13,8 +13,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
+import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle,
+} from '@/components/ui/resizable';
 import { useStudioStore } from '@/lib/stores/studio';
 import { useActiveConnection, useReadOnlyMode } from '@/lib/stores/connection';
 
@@ -139,7 +143,7 @@ export function QueryEditor() {
   return (
     <div className="flex flex-col h-full" onKeyDown={handleKeyDown}>
       {/* Tabs Bar */}
-      <div className="flex items-center justify-between border-b px-2">
+      <div className="flex items-center justify-between border-b px-2 shrink-0">
         <div className="flex items-center">
           <Tabs value={activeQueryTabId || ''} className="h-10">
             <TabsList className="h-9 bg-transparent p-0">
@@ -194,91 +198,98 @@ export function QueryEditor() {
         </div>
       </div>
 
-      {/* Editor */}
-      <div className="flex-1 min-h-[200px]">
-        <MonacoEditor
-          language={getLanguage()}
-          value={activeTab?.query || ''}
-          onChange={handleEditorChange}
-        />
-      </div>
-
-      {/* Results */}
-      {activeTab?.result && (
-        <div className="border-t flex flex-col h-[300px]">
-          {/* Results Header */}
-          <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/50">
-            <div className="flex items-center gap-3">
-              {activeTab.result.error ? (
-                <Badge variant="destructive">Error</Badge>
-              ) : (
-                <>
-                  <span className="text-sm font-medium">
-                    {activeTab.result.rowCount} row{activeTab.result.rowCount !== 1 ? 's' : ''}
-                  </span>
-                  <span className="text-xs text-muted-foreground flex items-center gap-1">
-                    <Clock className="h-3 w-3" />
-                    {activeTab.result.executionTimeMs}ms
-                  </span>
-                </>
-              )}
-            </div>
-            {!activeTab.result.error && activeTab.result.rows.length > 0 && (
-              <Button variant="ghost" size="sm" onClick={handleExportResults}>
-                <Download className="h-4 w-4 mr-1" />
-                Export
-              </Button>
-            )}
+      {/* Editor + Results (vertical resizable split) */}
+      <ResizablePanelGroup orientation="vertical" className="flex-1 min-h-0">
+        <ResizablePanel id="editor" defaultSize={activeTab?.result ? 55 : 100} minSize={20}>
+          <div className="h-full min-h-[160px]">
+            <MonacoEditor
+              language={getLanguage()}
+              value={activeTab?.query || ''}
+              onChange={handleEditorChange}
+            />
           </div>
+        </ResizablePanel>
 
-          {/* Results Content */}
-          <ScrollArea className="flex-1">
-            {activeTab.result.error ? (
-              <div className="p-4 text-destructive">
-                <pre className="text-sm whitespace-pre-wrap">
-                  {activeTab.result.error}
-                </pre>
+        {activeTab?.result && (
+          <>
+            <ResizableHandle withHandle />
+            <ResizablePanel id="results" defaultSize={45} minSize={15}>
+              <div className="flex h-full flex-col border-t">
+                {/* Results Header */}
+                <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/50 shrink-0">
+                  <div className="flex items-center gap-3">
+                    {activeTab.result.error ? (
+                      <Badge variant="destructive">Error</Badge>
+                    ) : (
+                      <>
+                        <span className="text-sm font-medium">
+                          {activeTab.result.rowCount} row{activeTab.result.rowCount !== 1 ? 's' : ''}
+                        </span>
+                        <span className="text-xs text-muted-foreground flex items-center gap-1">
+                          <Clock className="h-3 w-3" />
+                          {activeTab.result.executionTimeMs}ms
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  {!activeTab.result.error && activeTab.result.rows.length > 0 && (
+                    <Button variant="ghost" size="sm" onClick={handleExportResults}>
+                      <Download className="h-4 w-4 mr-1" />
+                      Export
+                    </Button>
+                  )}
+                </div>
+
+                {/* Results Content — native scroll container (mirrors data-viewer) */}
+                <div className="flex-1 overflow-auto min-h-0">
+                  {activeTab.result.error ? (
+                    <div className="p-4 text-destructive">
+                      <pre className="text-sm whitespace-pre-wrap">
+                        {activeTab.result.error}
+                      </pre>
+                    </div>
+                  ) : activeTab.result.rows.length === 0 ? (
+                    <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+                      Query executed successfully. No rows returned.
+                    </div>
+                  ) : (
+                    <Table>
+                      <TableHeader className="sticky top-0 z-10 bg-muted">
+                        <TableRow>
+                          {activeTab.result.columns.map((col) => (
+                            <TableHead key={col} className="whitespace-nowrap">
+                              {col}
+                            </TableHead>
+                          ))}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {activeTab.result.rows.map((row, i) => (
+                          <TableRow key={i}>
+                            {activeTab.result!.columns.map((col) => (
+                              <TableCell key={col} className="py-1.5 whitespace-nowrap">
+                                {row[col] === null || row[col] === undefined ? (
+                                  <span className="text-muted-foreground italic">NULL</span>
+                                ) : typeof row[col] === 'object' ? (
+                                  <code className="text-xs bg-muted px-1 py-0.5 rounded">
+                                    {JSON.stringify(row[col])}
+                                  </code>
+                                ) : (
+                                  String(row[col])
+                                )}
+                              </TableCell>
+                            ))}
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </div>
               </div>
-            ) : activeTab.result.rows.length === 0 ? (
-              <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-                Query executed successfully. No rows returned.
-              </div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    {activeTab.result.columns.map((col) => (
-                      <TableHead key={col} className="whitespace-nowrap">
-                        {col}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {activeTab.result.rows.map((row, i) => (
-                    <TableRow key={i}>
-                      {activeTab.result!.columns.map((col) => (
-                        <TableCell key={col} className="py-1.5">
-                          {row[col] === null || row[col] === undefined ? (
-                            <span className="text-muted-foreground italic">NULL</span>
-                          ) : typeof row[col] === 'object' ? (
-                            <code className="text-xs bg-muted px-1 py-0.5 rounded">
-                              {JSON.stringify(row[col])}
-                            </code>
-                          ) : (
-                            String(row[col])
-                          )}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-            <ScrollBar orientation="horizontal" />
-          </ScrollArea>
-        </div>
-      )}
+            </ResizablePanel>
+          </>
+        )}
+      </ResizablePanelGroup>
     </div>
   );
 }

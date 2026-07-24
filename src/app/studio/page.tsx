@@ -253,7 +253,7 @@ export default function StudioPage() {
   return (
     <div className="h-screen flex flex-col">
       {/* Header */}
-      <header className="h-14 border-b flex items-center justify-between px-4 shrink-0">
+      <header className="h-14 border-b border-border/60 bg-background/70 backdrop-blur-md flex items-center justify-between px-4 shrink-0">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <Database className="h-5 w-5 text-primary" />
@@ -367,7 +367,7 @@ export default function StudioPage() {
             className="h-full overflow-hidden shrink-0 relative flex"
             style={{ width: sidebarWidth }}
           >
-            <div className="flex-1 overflow-auto border-r">
+            <div className="flex-1 overflow-auto border-r border-border/60 bg-background/70 backdrop-blur-md">
               <TableBrowser />
             </div>
             {/* Resize Handle */}
@@ -383,7 +383,7 @@ export default function StudioPage() {
         {/* Main Panel */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Tab Bar */}
-          <div className="border-b px-2 flex items-center justify-between shrink-0">
+          <div className="border-b border-border/60 bg-background/60 backdrop-blur-md px-2 flex items-center justify-between shrink-0">
             <Tabs
               value={activeTab}
               onValueChange={(v) => setActiveTab(v as TabType)}

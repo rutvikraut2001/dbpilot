@@ -10,6 +10,7 @@ import {
   MiniMap,
   useNodesState,
   useEdgesState,
+  useNodesInitialized,
   MarkerType,
   Panel,
   BackgroundVariant,
@@ -21,9 +22,10 @@ import {
   getNodesBounds,
   getViewportForBounds,
 } from '@xyflow/react';
+import Dagre from '@dagrejs/dagre';
 import { toPng, toSvg } from 'html-to-image';
 import '@xyflow/react/dist/style.css';
-import { RefreshCw, Download, Search, X, Info, List, Image, FileCode } from 'lucide-react';
+import { RefreshCw, Download, Search, X, Info, List, Image, FileCode, LayoutGrid, GitBranch } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -44,12 +46,51 @@ import {
 import { useStudioStore } from '@/lib/stores/studio';
 import { useActiveConnection } from '@/lib/stores/connection';
 import { Relationship, ColumnInfo } from '@/lib/adapters/types';
+import { TABLE_DRAG_MIME } from '@/lib/constants';
 
 interface TableNodeData extends Record<string, unknown> {
   label: string;
   columns: ColumnInfo[];
   rowCount?: number;
   isHighlighted?: boolean;
+  // Column names referenced by relationships — drive which handles exist so
+  // edges always find their source/target handle (prevents React Flow error #008).
+  sourceHandleCols?: string[];
+  targetHandleCols?: string[];
+}
+
+const NODE_WIDTH_FALLBACK = 260;
+const NODE_HEIGHT_FALLBACK = 220;
+
+// Lay out nodes with dagre using each node's *measured* size so tall
+// (many-column) tables never overlap their neighbours.
+function getLayoutedElements(
+  nodes: SchemaNode[],
+  edges: Edge[],
+  direction: 'LR' | 'TB' = 'LR'
+): SchemaNode[] {
+  const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
+  g.setGraph({ rankdir: direction, nodesep: 50, ranksep: 130, marginx: 40, marginy: 40 });
+
+  nodes.forEach((n) => {
+    g.setNode(n.id, {
+      width: n.measured?.width ?? NODE_WIDTH_FALLBACK,
+      height: n.measured?.height ?? NODE_HEIGHT_FALLBACK,
+    });
+  });
+  edges.forEach((e) => {
+    if (g.hasNode(e.source) && g.hasNode(e.target)) g.setEdge(e.source, e.target);
+  });
+
+  Dagre.layout(g);
+
+  return nodes.map((n) => {
+    const p = g.node(n.id);
+    const w = n.measured?.width ?? NODE_WIDTH_FALLBACK;
+    const h = n.measured?.height ?? NODE_HEIGHT_FALLBACK;
+    // dagre returns node centers; React Flow positions are top-left.
+    return { ...n, position: { x: p.x - w / 2, y: p.y - h / 2 } };
+  });
 }
 
 const TableNodeComponent = memo(function TableNodeComponent({ data }: { data: TableNodeData }) {
@@ -57,63 +98,36 @@ const TableNodeComponent = memo(function TableNodeComponent({ data }: { data: Ta
   const fkColumns = data.columns.filter(col => col.isForeignKey);
   const regularColumns = data.columns.filter(col => !col.isPrimaryKey && !col.isForeignKey);
 
-  // Calculate handle positions for each column type
-  let handleIndex = 0;
-  const getHandleOffset = () => {
-    const offset = 44 + handleIndex * 26; // Start after header + column row height
-    handleIndex++;
-    return offset;
+  // Handles are driven by the relationship graph (not PK/FK flags or load timing),
+  // so every edge's source/target handle is guaranteed to exist.
+  const targetCols = data.targetHandleCols ?? [];
+  const sourceCols = data.sourceHandleCols ?? [];
+
+  // Approximate vertical offset of a column's row, so a handle sits next to its
+  // column when the schema is loaded (falls back to the header when it isn't).
+  const HEADER_H = 42;
+  const ROW_H = 26;
+  const renderOrder = [...pkColumns, ...fkColumns, ...regularColumns].map(c => c.name);
+  const offsetFor = (name: string) => {
+    const i = renderOrder.indexOf(name);
+    return i >= 0 ? HEADER_H + i * ROW_H + ROW_H / 2 : HEADER_H / 2;
   };
 
-  // Reset for PK handles
-  handleIndex = 0;
-  const pkHandleOffsets = pkColumns.map(() => getHandleOffset());
-
-  // Continue for FK handles (after PK section + border)
-  if (pkColumns.length > 0) handleIndex = pkColumns.length;
-  const fkHandleOffsets = fkColumns.map(() => getHandleOffset());
-
   return (
-    <Card className={`min-w-[240px] shadow-lg border-2 transition-colors relative ${data.isHighlighted ? 'border-primary ring-2 ring-primary/20' : 'border-border'}`}>
-      {/* Default target handle (fallback - left side center) */}
-      <Handle
-        type="target"
-        position={Position.Left}
-        id="default-target"
-        style={{
-          top: '50%',
-          background: '#94a3b8',
-          width: 8,
-          height: 8,
-          border: '2px solid #64748b',
-          opacity: pkColumns.length > 0 ? 0 : 1,
-        }}
-      />
+    <Card className={`min-w-[240px] shadow-lg border transition-colors relative rounded-xl ${data.isHighlighted ? 'border-primary ring-2 ring-primary/30' : 'border-border'}`}>
+      {/* Fallback handles (unused by edges, kept for safety) */}
+      <Handle type="target" position={Position.Left} id="default-target" style={{ top: '50%', opacity: 0 }} />
+      <Handle type="source" position={Position.Right} id="default-source" style={{ top: '50%', opacity: 0 }} />
 
-      {/* Default source handle (fallback - right side center) */}
-      <Handle
-        type="source"
-        position={Position.Right}
-        id="default-source"
-        style={{
-          top: '50%',
-          background: '#94a3b8',
-          width: 8,
-          height: 8,
-          border: '2px solid #64748b',
-          opacity: fkColumns.length > 0 ? 0 : 1,
-        }}
-      />
-
-      {/* Target handles for Primary Keys (left side - where relationships come IN) */}
-      {pkColumns.map((col, idx) => (
+      {/* Target handles (left) — columns referenced as the target of a relationship */}
+      {targetCols.map((name) => (
         <Handle
-          key={`target-${col.name}`}
+          key={`target-${name}`}
           type="target"
           position={Position.Left}
-          id={`${col.name}-target`}
+          id={`${name}-target`}
           style={{
-            top: pkHandleOffsets[idx],
+            top: offsetFor(name),
             background: '#f59e0b',
             width: 10,
             height: 10,
@@ -122,15 +136,15 @@ const TableNodeComponent = memo(function TableNodeComponent({ data }: { data: Ta
         />
       ))}
 
-      {/* Source handles for Foreign Keys (right side - where relationships go OUT) */}
-      {fkColumns.map((col, idx) => (
+      {/* Source handles (right) — columns referenced as the source of a relationship */}
+      {sourceCols.map((name) => (
         <Handle
-          key={`source-${col.name}`}
+          key={`source-${name}`}
           type="source"
           position={Position.Right}
-          id={`${col.name}-source`}
+          id={`${name}-source`}
           style={{
-            top: fkHandleOffsets[idx],
+            top: offsetFor(name),
             background: '#3b82f6',
             width: 10,
             height: 10,
@@ -139,7 +153,7 @@ const TableNodeComponent = memo(function TableNodeComponent({ data }: { data: Ta
         />
       ))}
 
-      <CardHeader className="py-2 px-3 bg-primary text-primary-foreground rounded-t-lg">
+      <CardHeader className="py-2 px-3 bg-primary text-primary-foreground rounded-t-xl">
         <CardTitle className="text-sm font-semibold flex items-center justify-between">
           <span className="truncate">{data.label}</span>
           {data.rowCount !== undefined && (
@@ -238,8 +252,9 @@ export function SchemaViewer() {
 
 function SchemaViewerInner() {
   const activeConnection = useActiveConnection();
-  const { tables } = useStudioStore();
-  const { setCenter } = useReactFlow();
+  const { tables, schemaFocusTable, schemaFocusNonce, setSchemaFocusTable } = useStudioStore();
+  const { setCenter, fitView, getNodes, screenToFlowPosition } = useReactFlow();
+  const nodesInitialized = useNodesInitialized();
 
   const [nodes, setNodes, onNodesChange] = useNodesState<SchemaNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -247,6 +262,45 @@ function SchemaViewerInner() {
   const [relationships, setRelationships] = useState<Relationship[]>([]);
   const [tableSchemas, setTableSchemas] = useState<Map<string, ColumnInfo[]>>(new Map());
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
+
+  // Layout coordination: request a dagre re-layout; runs once nodes are measured.
+  const [needsLayout, setNeedsLayout] = useState(false);
+  // Tables the user has dragged onto the canvas (force-included past a focus filter).
+  const [pinnedTables, setPinnedTables] = useState<Set<string>>(new Set());
+  // Positions for freshly dropped tables so they land where dropped (not re-laid-out).
+  const dropPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+
+  // When a table is focused, show only it + its directly related tables.
+  const focusSet = useMemo(() => {
+    if (!schemaFocusTable) return null;
+    const set = new Set<string>([schemaFocusTable]);
+    relationships.forEach((r) => {
+      if (r.sourceTable === schemaFocusTable) set.add(r.targetTable);
+      if (r.targetTable === schemaFocusTable) set.add(r.sourceTable);
+    });
+    return set;
+  }, [schemaFocusTable, relationships]);
+
+  const visibleTables = useMemo(() => {
+    if (!focusSet) return tables;
+    return tables.filter((t) => focusSet.has(t.name) || pinnedTables.has(t.name));
+  }, [tables, focusSet, pinnedTables]);
+
+  // Per-table sets of columns referenced by relationships (drive node handles).
+  const handleColsByTable = useMemo(() => {
+    const src = new Map<string, Set<string>>();
+    const tgt = new Map<string, Set<string>>();
+    const add = (m: Map<string, Set<string>>, table: string, col: string) => {
+      let s = m.get(table);
+      if (!s) { s = new Set(); m.set(table, s); }
+      s.add(col);
+    };
+    relationships.forEach((r) => {
+      add(src, r.sourceTable, r.sourceColumn);
+      add(tgt, r.targetTable, r.targetColumn);
+    });
+    return { src, tgt };
+  }, [relationships]);
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -353,94 +407,104 @@ function SchemaViewerInner() {
     fetchRelationships();
   }, [fetchRelationships]);
 
+  // Batch-load every table's column schema in a single request (replaces the
+  // old 1-request-per-table fan-out).
   useEffect(() => {
-    // Fetch schemas for all tables
-    tables.forEach((table) => {
-      fetchTableSchema(table.name);
-    });
-  }, [tables, fetchTableSchema]);
+    if (!activeConnection || tables.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/schema/batch?connectionId=${activeConnection.id}`);
+        const data = await res.json();
+        if (!cancelled && data.schemas) {
+          const map = new Map<string, ColumnInfo[]>();
+          for (const [name, cols] of Object.entries(data.schemas)) {
+            map.set(name, cols as ColumnInfo[]);
+          }
+          setTableSchemas(map);
+        }
+      } catch {
+        // fall back to per-table lazy loading below
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeConnection, tables]);
 
-  // Build nodes when data changes (separate from edge styling)
+  // Build node DATA when the visible set / schemas / highlight change.
+  // Positions are read live from React Flow so drags and dagre results survive
+  // data-only rebuilds (e.g. when a table's columns finish loading).
   useEffect(() => {
-    if (tables.length === 0) return;
+    if (visibleTables.length === 0) {
+      setNodes([]);
+      return;
+    }
 
-    // Create a better layout - tables with relationships in the center
-    const tablesWithRelations = new Set<string>();
-    relationships.forEach(rel => {
-      tablesWithRelations.add(rel.sourceTable);
-      tablesWithRelations.add(rel.targetTable);
-    });
+    const currentPos = new Map(getNodes().map((n) => [n.id, n.position]));
+    let hasUnplacedNew = false;
 
-    const relatedTables = tables.filter(t => tablesWithRelations.has(t.name));
-    const standaloneTables = tables.filter(t => !tablesWithRelations.has(t.name));
-
-    // Layout related tables in a grid at the top
-    const nodeWidth = 260;
-    const nodeHeight = 280;
-    const padding = 80;
-
-    const relatedCols = Math.max(3, Math.ceil(Math.sqrt(relatedTables.length)));
-
-    const newNodes: SchemaNode[] = [];
-
-    // Add related tables first
-    relatedTables.forEach((table, index) => {
-      const row = Math.floor(index / relatedCols);
-      const col = index % relatedCols;
-
-      newNodes.push({
+    const newNodes: SchemaNode[] = visibleTables.map((table) => {
+      let position = currentPos.get(table.name);
+      if (!position) {
+        const dropped = dropPositionsRef.current.get(table.name);
+        if (dropped) {
+          position = dropped;
+        } else {
+          position = { x: 0, y: 0 };
+          hasUnplacedNew = true;
+        }
+      }
+      return {
         id: table.name,
         type: 'tableNode' as const,
-        position: {
-          x: col * (nodeWidth + padding),
-          y: row * (nodeHeight + padding),
-        },
+        position,
         data: {
           label: table.name,
           columns: tableSchemas.get(table.name) || [],
           rowCount: table.rowCount,
           isHighlighted: highlightedTable === table.name,
+          sourceHandleCols: Array.from(handleColsByTable.src.get(table.name) ?? []),
+          targetHandleCols: Array.from(handleColsByTable.tgt.get(table.name) ?? []),
         },
-      });
-    });
-
-    // Add standalone tables below
-    const standaloneStartY = relatedTables.length > 0
-      ? (Math.ceil(relatedTables.length / relatedCols)) * (nodeHeight + padding) + 100
-      : 0;
-    const standaloneCols = Math.max(4, Math.ceil(Math.sqrt(standaloneTables.length)));
-
-    standaloneTables.forEach((table, index) => {
-      const row = Math.floor(index / standaloneCols);
-      const col = index % standaloneCols;
-
-      newNodes.push({
-        id: table.name,
-        type: 'tableNode' as const,
-        position: {
-          x: col * (nodeWidth + padding),
-          y: standaloneStartY + row * (nodeHeight + padding),
-        },
-        data: {
-          label: table.name,
-          columns: tableSchemas.get(table.name) || [],
-          rowCount: table.rowCount,
-          isHighlighted: highlightedTable === table.name,
-        },
-      });
+      };
     });
 
     setNodes(newNodes);
-  }, [tables, relationships, tableSchemas, highlightedTable, setNodes]);
+    // Only auto-arrange when brand-new nodes appear without a chosen position
+    // (initial load / focus change) — never on a plain data refresh or drag.
+    if (hasUnplacedNew) setNeedsLayout(true);
+  }, [visibleTables, tableSchemas, highlightedTable, handleColsByTable, getNodes, setNodes]);
 
-  // Build edges separately (also react to selectedEdge changes)
+  // Relationships load (and refresh) after the first render — re-run the layout
+  // so dagre can arrange nodes hierarchically by their FK edges.
   useEffect(() => {
-    if (relationships.length === 0) {
+    if (relationships.length > 0) setNeedsLayout(true);
+  }, [relationships]);
+
+  // Run dagre once the (new) nodes have been measured.
+  useEffect(() => {
+    if (!needsLayout || !nodesInitialized) return;
+    const measured = getNodes() as SchemaNode[];
+    if (measured.length === 0) return;
+    setNodes(getLayoutedElements(measured, edges));
+    setNeedsLayout(false);
+    requestAnimationFrame(() => fitView({ padding: 0.2, duration: 400 }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsLayout, nodesInitialized]);
+
+  // Build edges separately (also react to selectedEdge changes). Only emit an
+  // edge when both endpoints are visible so React Flow never validates against
+  // a missing node.
+  useEffect(() => {
+    const visibleNames = new Set(visibleTables.map((t) => t.name));
+    const visibleRels = relationships.filter(
+      (r) => visibleNames.has(r.sourceTable) && visibleNames.has(r.targetTable)
+    );
+    if (visibleRels.length === 0) {
       setEdges([]);
       return;
     }
 
-    const newEdges: Edge[] = relationships.map((rel) => {
+    const newEdges: Edge[] = visibleRels.map((rel) => {
       const edgeId = `edge-${rel.sourceTable}-${rel.sourceColumn}-${rel.targetTable}-${rel.targetColumn}`;
       const isSelected = selectedEdge === edgeId;
 
@@ -488,7 +552,7 @@ function SchemaViewerInner() {
     });
 
     setEdges(newEdges);
-  }, [relationships, selectedEdge, setEdges]);
+  }, [relationships, visibleTables, selectedEdge, setEdges]);
 
   const handleEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
     setSelectedEdge(prev => prev === edge.id ? null : edge.id);
@@ -499,7 +563,52 @@ function SchemaViewerInner() {
   }, []);
 
   const [isExporting, setIsExporting] = useState(false);
-  const { getNodes } = useReactFlow();
+
+  // Highlight (and, via fitView, center on) the focused table whenever a
+  // "Show diagram" action fires from the sidebar.
+  useEffect(() => {
+    if (!schemaFocusTable) return;
+    setHighlightedTable(schemaFocusTable);
+    const t = setTimeout(() => setHighlightedTable(null), 3000);
+    return () => clearTimeout(t);
+  }, [schemaFocusTable, schemaFocusNonce]);
+
+  // Manual re-arrange button.
+  const handleAutoArrange = useCallback(() => setNeedsLayout(true), []);
+
+  // Drag a table from the sidebar onto the canvas.
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      const name =
+        e.dataTransfer.getData(TABLE_DRAG_MIME) || e.dataTransfer.getData('text/plain');
+      if (!name || !tables.some((t) => t.name === name)) return;
+
+      const existing = getNodes().find((n) => n.id === name);
+      if (existing) {
+        setHighlightedTable(name);
+        setCenter(existing.position.x + 130, existing.position.y + 100, {
+          zoom: 1,
+          duration: 400,
+        });
+        setTimeout(() => setHighlightedTable(null), 2500);
+        return;
+      }
+
+      const position = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      dropPositionsRef.current.set(name, position);
+      fetchTableSchema(name);
+      setPinnedTables((prev) => new Set(prev).add(name));
+      setHighlightedTable(name);
+      setTimeout(() => setHighlightedTable(null), 2500);
+    },
+    [tables, getNodes, screenToFlowPosition, setCenter, fetchTableSchema]
+  );
 
   const handleExportImage = useCallback(async (format: 'png' | 'svg' = 'png') => {
     const viewport = document.querySelector('.react-flow__viewport') as HTMLElement;
@@ -618,7 +727,11 @@ function SchemaViewerInner() {
   }
 
   return (
-    <div className="h-full w-full schema-viewer">
+    <div
+      className="h-full w-full schema-viewer"
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
       <style jsx global>{`
         .schema-viewer {
           --label-bg: rgba(255, 255, 255, 0.95);
@@ -694,6 +807,25 @@ function SchemaViewerInner() {
           gap={20}
           size={1}
         />
+        {schemaFocusTable && (
+          <Panel position="top-center">
+            <div className="flex items-center gap-2 rounded-full border bg-background/90 px-3 py-1.5 text-sm shadow-sm backdrop-blur">
+              <GitBranch className="h-3.5 w-3.5 text-primary" />
+              <span>
+                Focused on <b>{schemaFocusTable}</b>
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 rounded-full px-2 text-xs"
+                onClick={() => setSchemaFocusTable(null)}
+              >
+                <X className="h-3 w-3 mr-1" />
+                Show all tables
+              </Button>
+            </div>
+          </Panel>
+        )}
         <Controls className="!bg-background !border !rounded-lg !shadow-sm" />
         <MiniMap
           nodeColor={minimapNodeColor}
@@ -767,6 +899,15 @@ function SchemaViewerInner() {
             )}
           </div>
 
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleAutoArrange}
+            className="bg-background"
+          >
+            <LayoutGrid className="h-4 w-4 mr-1" />
+            Arrange
+          </Button>
           <Button
             variant="outline"
             size="sm"

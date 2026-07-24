@@ -245,11 +245,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen relative">
-      {/* Sky background */}
-      <div className="fixed inset-0 -z-10 sky-bg">
-        <div className="absolute inset-0 stars-pattern" />
-      </div>
-
+      {/* Ambient themed background is mounted globally in layout.tsx */}
       <div className="relative flex flex-col min-h-screen">
         {/* Header — fixed so it stays visible on scroll */}
         <header className="border-b bg-white/70 dark:bg-slate-900/80 backdrop-blur-md fixed top-0 left-0 right-0 z-50">

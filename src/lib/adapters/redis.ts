@@ -346,7 +346,7 @@ export class RedisAdapter extends BaseAdapter {
     const total = allKeys.length;
 
     // Sort keys
-    let sortedKeys = [...allKeys];
+    const sortedKeys = [...allKeys];
     if (sortBy === "key" || !sortBy) {
       sortedKeys.sort((a, b) =>
         sortOrder === "desc" ? b.localeCompare(a) : a.localeCompare(b)

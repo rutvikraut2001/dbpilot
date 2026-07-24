@@ -2,6 +2,9 @@
 
 import { DatabaseType } from './adapters/types';
 
+// Custom MIME type used when dragging a table from the sidebar onto the schema canvas.
+export const TABLE_DRAG_MIME = 'application/db-studio-table';
+
 export const supportedDatabases: { type: DatabaseType; name: string; placeholder: string }[] = [
   {
     type: 'postgresql',

@@ -51,7 +51,7 @@
 }
 
 :root {
-  --radius: 0.625rem;
+  --radius: 1rem;
   --background: oklch(0.99 0.002 265);
   --foreground: oklch(0.15 0.01 265);
   --card: oklch(1 0 0);
@@ -67,8 +67,8 @@
   --accent: oklch(0.93 0.04 295);
   --accent-foreground: oklch(0.30 0.10 295);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.90 0.02 265);
-  --input: oklch(0.90 0.02 265);
+  --border: oklch(0.93 0.012 265);
+  --input: oklch(0.92 0.014 265);
   --ring: oklch(0.55 0.22 265);
   --chart-1: oklch(0.55 0.22 265);
   --chart-2: oklch(0.65 0.18 170);
@@ -101,8 +101,8 @@
   --accent: oklch(0.28 0.05 295);
   --accent-foreground: oklch(0.90 0.01 295);
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(0.30 0.03 275);
-  --input: oklch(0.28 0.03 275);
+  --border: oklch(0.27 0.022 275);
+  --input: oklch(0.26 0.022 275);
   --ring: oklch(0.68 0.19 265);
   --chart-1: oklch(0.68 0.19 265);
   --chart-2: oklch(0.70 0.15 170);
@@ -180,6 +180,19 @@
 .dot-pattern {
   background-image: radial-gradient(circle, currentColor 1px, transparent 1px);
   background-size: 24px 24px;
+}
+
+/* Underwater background (light theme) — static fallback behind the canvas */
+.sea-bg {
+  background:
+    radial-gradient(1200px 600px at 20% -5%, rgba(255,255,255,0.55), transparent 60%),
+    linear-gradient(180deg, #e6f9ff 0%, #c2ebfb 25%, #9fdcf3 55%, #6fbfe6 100%);
+}
+
+.dark .sea-bg {
+  background:
+    radial-gradient(1200px 600px at 20% -5%, rgba(99,102,241,0.10), transparent 60%),
+    linear-gradient(180deg, #0c1222 0%, #111827 25%, #12203a 60%, #0f172a 100%);
 }
 
 /* Sky backgrounds */

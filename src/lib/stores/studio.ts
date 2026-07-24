@@ -29,6 +29,12 @@ interface StudioState {
   // Active tab in the main panel
   activeTab: TabType;
 
+  // Schema viewer focus: when set, the ER diagram shows only this table + its
+  // directly related tables. The nonce lets repeated "Show diagram" clicks on the
+  // same table re-trigger the focus effect.
+  schemaFocusTable: string | null;
+  schemaFocusNonce: number;
+
   // Data tabs
   dataTabs: DataTab[];
   activeDataTabId: string | null;
@@ -55,6 +61,7 @@ interface StudioState {
   setIsLoadingTables: (loading: boolean) => void;
   setIsLoadingSchema: (loading: boolean) => void;
   setActiveTab: (tab: TabType) => void;
+  setSchemaFocusTable: (table: string | null) => void;
   setSidebarOpen: (open: boolean) => void;
   setSidebarWidth: (width: number) => void;
   setTableFilter: (filter: string) => void;
@@ -95,6 +102,8 @@ const initialState = {
   isLoadingTables: false,
   isLoadingSchema: false,
   activeTab: 'data' as TabType,
+  schemaFocusTable: null as string | null,
+  schemaFocusNonce: 0,
   dataTabs: [] as DataTab[],
   activeDataTabId: null as string | null,
   queryTabs: [initialQueryTab],
@@ -120,6 +129,12 @@ export const useStudioStore = create<StudioState>()((set, get) => ({
   setIsLoadingSchema: (loading) => set({ isLoadingSchema: loading }),
 
   setActiveTab: (tab) => set({ activeTab: tab }),
+
+  setSchemaFocusTable: (table) =>
+    set((state) => ({
+      schemaFocusTable: table,
+      schemaFocusNonce: state.schemaFocusNonce + 1,
+    })),
 
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
 

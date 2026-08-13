@@ -29,7 +29,6 @@ import { RefreshCw, Download, Search, X, Info, List, Image, FileCode, LayoutGrid
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
 import {
@@ -252,7 +251,10 @@ export function SchemaViewer() {
 
 function SchemaViewerInner() {
   const activeConnection = useActiveConnection();
-  const { tables, schemaFocusTable, schemaFocusNonce, setSchemaFocusTable } = useStudioStore();
+  const tables = useStudioStore((s) => s.tables);
+  const schemaFocusTable = useStudioStore((s) => s.schemaFocusTable);
+  const schemaFocusNonce = useStudioStore((s) => s.schemaFocusNonce);
+  const setSchemaFocusTable = useStudioStore((s) => s.setSchemaFocusTable);
   const { setCenter, fitView, getNodes, screenToFlowPosition } = useReactFlow();
   const nodesInitialized = useNodesInitialized();
 
@@ -952,7 +954,12 @@ function SchemaViewerInner() {
                 Legend
               </Button>
             </PopoverTrigger>
-            <PopoverContent side="bottom" align="start" className="w-auto p-3">
+            <PopoverContent
+              side="bottom"
+              align="start"
+              collisionPadding={16}
+              className="w-auto max-w-[calc(100vw-2rem)] p-3"
+            >
               <div className="text-xs font-medium mb-2">Legend</div>
               <div className="flex flex-col gap-2 text-xs">
                 {/* Column Types */}
@@ -998,32 +1005,61 @@ function SchemaViewerInner() {
                 Overview
               </Button>
             </PopoverTrigger>
-            <PopoverContent side="bottom" align="start" className="w-80 p-3">
-              <div className="text-xs font-medium mb-2">Database Overview</div>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Tables:</span>
-                  <span className="font-medium">{stats.totalTables}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Relations:</span>
-                  <span className="font-medium">{stats.totalRelationships}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">With FK:</span>
-                  <span className="font-medium">{stats.tablesWithFK}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">With PK:</span>
-                  <span className="font-medium">{stats.tablesWithPK}</span>
+            <PopoverContent
+              side="bottom"
+              align="start"
+              // Keep the panel clear of the viewport edges when the diagram is
+              // scrolled or the window is short.
+              collisionPadding={16}
+              className="flex w-80 max-w-[calc(100vw-2rem)] flex-col overflow-hidden p-0"
+              style={{
+                // Radix measures the space left between the trigger and the
+                // viewport edge; capping to it is what keeps the panel inside
+                // the screen at any window height. The second bound stops it
+                // from becoming absurdly tall on a large display.
+                maxHeight:
+                  'min(var(--radix-popover-content-available-height, 28rem), 32rem)',
+              }}
+            >
+              <div className="shrink-0 p-3 pb-2">
+                <div className="text-xs font-medium mb-2">Database Overview</div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Tables:</span>
+                    <span className="font-medium">{stats.totalTables}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Relations:</span>
+                    <span className="font-medium">{stats.totalRelationships}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">With FK:</span>
+                    <span className="font-medium">{stats.tablesWithFK}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">With PK:</span>
+                    <span className="font-medium">{stats.tablesWithPK}</span>
+                  </div>
                 </div>
               </div>
 
               {relationships.length > 0 && (
                 <>
-                  <Separator className="my-2" />
-                  <div className="text-xs font-medium mb-1">Relationships</div>
-                  <ScrollArea className="max-h-[200px]">
+                  <Separator className="shrink-0" />
+                  <div className="shrink-0 px-3 pt-2 pb-1 text-xs font-medium">
+                    Relationships
+                    <span className="ml-1 font-normal text-muted-foreground">
+                      ({relationships.length})
+                    </span>
+                  </div>
+                  {/*
+                    A plain scroll container rather than Radix ScrollArea: its
+                    Viewport is `size-full`, so a bare `max-h` on the Root left
+                    the height unconstrained and the list rendered straight out
+                    the bottom of the popover. `min-h-0` is what lets this flex
+                    child actually shrink and scroll.
+                  */}
+                  <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-3">
                     <div className="space-y-1">
                       {relationships.map((rel) => {
                         const edgeId = `edge-${rel.sourceTable}-${rel.sourceColumn}-${rel.targetTable}-${rel.targetColumn}`;
@@ -1042,7 +1078,7 @@ function SchemaViewerInner() {
                               <span className="px-1 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-[8px] font-bold shrink-0">
                                 {relTypeLabel}
                               </span>
-                              <div className="flex items-center gap-0.5 flex-wrap">
+                              <div className="flex min-w-0 flex-wrap items-center gap-0.5 break-all">
                                 <span className="font-medium">{rel.sourceTable}</span>
                                 <span className="text-blue-600 dark:text-blue-400">.{rel.sourceColumn}</span>
                                 <span className="mx-0.5 text-muted-foreground">→</span>
@@ -1054,7 +1090,7 @@ function SchemaViewerInner() {
                         );
                       })}
                     </div>
-                  </ScrollArea>
+                  </div>
                 </>
               )}
             </PopoverContent>

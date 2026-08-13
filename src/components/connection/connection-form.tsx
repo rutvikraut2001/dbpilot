@@ -41,8 +41,10 @@ interface ConnectionFormProps {
 }
 
 export function ConnectionForm({ onConnected }: ConnectionFormProps) {
-  const { addConnection, removeConnection, updateConnection, setActiveConnection } =
-    useConnectionStore();
+  const addConnection = useConnectionStore((s) => s.addConnection);
+  const removeConnection = useConnectionStore((s) => s.removeConnection);
+  const updateConnection = useConnectionStore((s) => s.updateConnection);
+  const setActiveConnection = useConnectionStore((s) => s.setActiveConnection);
 
   const [dbType, setDbType] = useState<DatabaseType>('postgresql');
   const [connectionString, setConnectionString] = useState('');
@@ -57,7 +59,9 @@ export function ConnectionForm({ onConnected }: ConnectionFormProps) {
     setSshTunnel((prev) => ({ ...prev, ...updates }));
   };
 
-  const buildRequestBody = (overrides?: Partial<{ connectionId: string; readOnly: boolean }>) => ({
+  // Note: read-only mode is not settable here. The server starts every new
+  // connection read-only; the studio's toggle is the only way to change it.
+  const buildRequestBody = (overrides?: Partial<{ connectionId: string }>) => ({
     type: dbType,
     connectionString,
     sshTunnel: sshTunnel.enabled ? sshTunnel : undefined,
@@ -175,12 +179,6 @@ export function ConnectionForm({ onConnected }: ConnectionFormProps) {
           value={connectionString}
           onChange={(e) => setConnectionString(e.target.value)}
         />
-        <p className="text-xs text-muted-foreground">
-          Stored locally, never sent to external servers.
-          {!sshTunnel.enabled && (
-            <> Multiple connection strategies tried automatically.</>
-          )}
-        </p>
       </div>
 
       {/* Advanced / SSH Tunnel Section */}

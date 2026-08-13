@@ -43,6 +43,7 @@ import {
   useConnectionStore,
   useActiveConnection,
   useReadOnlyMode,
+  useForceReadOnly,
   useHasHydrated,
 } from '@/lib/stores/connection';
 import { useStudioStore, TabType } from '@/lib/stores/studio';
@@ -56,14 +57,17 @@ export default function StudioPage() {
   const hasHydrated = useHasHydrated();
   const activeConnection = useActiveConnection();
   const readOnlyMode = useReadOnlyMode();
-  const { setActiveConnection, toggleReadOnlyMode } = useConnectionStore();
-  const {
-    activeTab,
-    setActiveTab,
-    sidebarOpen,
-    setSidebarOpen,
-    reset,
-  } = useStudioStore();
+  const forceReadOnly = useForceReadOnly();
+  // Per-field selectors rather than whole-store subscriptions: actions are
+  // stable references, so only real state changes re-render this component.
+  const setActiveConnection = useConnectionStore((s) => s.setActiveConnection);
+  const toggleReadOnlyMode = useConnectionStore((s) => s.toggleReadOnlyMode);
+  const syncReadOnlyMode = useConnectionStore((s) => s.syncReadOnlyMode);
+  const activeTab = useStudioStore((s) => s.activeTab);
+  const setActiveTab = useStudioStore((s) => s.setActiveTab);
+  const sidebarOpen = useStudioStore((s) => s.sidebarOpen);
+  const setSidebarOpen = useStudioStore((s) => s.setSidebarOpen);
+  const reset = useStudioStore((s) => s.reset);
 
   // If Redis connection and schema tab is active, redirect to data tab
   useEffect(() => {
@@ -160,7 +164,10 @@ export default function StudioPage() {
         const healthData = await healthResponse.json();
 
         if (healthData.exists && healthData.healthy) {
-          // Connection is still alive, no need to reconnect
+          // Connection is still alive, no need to reconnect. Still adopt the
+          // server's read-only state — the UI must never show a mode the server
+          // isn't actually enforcing.
+          await syncReadOnlyMode(connection.id);
           setIsReconnecting(false);
           return;
         }
@@ -182,7 +189,10 @@ export default function StudioPage() {
           throw new Error('Failed to reconnect');
         }
 
-        // Connection restored successfully
+        // Connection restored. Adopt the server's read-only state rather than a
+        // locally-remembered preference — a fresh connection is read-only, and
+        // the user re-enables writes deliberately via the toggle.
+        await syncReadOnlyMode(connection.id);
         setIsReconnecting(false);
       } catch (error) {
         console.error('Reconnect error:', error);
@@ -204,7 +214,7 @@ export default function StudioPage() {
       setIsReconnecting(false);
       router.push('/');
     }
-  }, [hasHydrated, activeConnection, router, setActiveConnection]);
+  }, [hasHydrated, activeConnection, router, setActiveConnection, syncReadOnlyMode]);
 
   const handleDisconnect = async () => {
     if (!activeConnection) return;
@@ -331,18 +341,33 @@ export default function StudioPage() {
                   ) : (
                     <ShieldOff className="h-4 w-4 text-amber-500" />
                   )}
-                  <Label htmlFor="readonly-mode" className="text-sm cursor-pointer">
+                  <Label
+                    htmlFor="readonly-mode"
+                    className={
+                      forceReadOnly
+                        ? 'text-sm'
+                        : 'text-sm cursor-pointer'
+                    }
+                  >
                     Read-only
+                    {forceReadOnly && (
+                      <span className="ml-1 text-xs text-muted-foreground">
+                        (enforced)
+                      </span>
+                    )}
                   </Label>
                   <Switch
                     id="readonly-mode"
                     checked={readOnlyMode}
                     onCheckedChange={toggleReadOnlyMode}
+                    disabled={forceReadOnly}
                   />
                 </div>
               </TooltipTrigger>
               <TooltipContent>
-                {readOnlyMode
+                {forceReadOnly
+                  ? 'This instance runs with FORCE_READ_ONLY=true — write access cannot be enabled'
+                  : readOnlyMode
                   ? 'Write operations are disabled for safety'
                   : 'Write operations are enabled'}
               </TooltipContent>

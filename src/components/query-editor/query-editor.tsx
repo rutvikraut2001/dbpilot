@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
-import { Play, Plus, X, Clock, Download, Loader2 } from 'lucide-react';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import { Play, Plus, X, Clock, Download, Loader2, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
@@ -36,18 +37,104 @@ const MonacoEditor = dynamic(
   }
 );
 
+// Fixed row height, applied to each <tr> so the virtualizer's arithmetic and the
+// rendered layout agree exactly. Cells are nowrap, so rows never grow past it.
+const RESULT_ROW_HEIGHT = 33;
+
+function ResultCell({ value }: Readonly<{ value: unknown }>) {
+  if (value === null || value === undefined) {
+    return <span className="text-muted-foreground italic">NULL</span>;
+  }
+  if (typeof value === 'object') {
+    return (
+      <code className="text-xs bg-muted px-1 py-0.5 rounded">
+        {JSON.stringify(value)}
+      </code>
+    );
+  }
+  return <>{String(value)}</>;
+}
+
+/**
+ * Virtualized query results.
+ *
+ * A query can return far more rows than a browser can lay out — this previously
+ * rendered every returned row as a real <tr>, so a large result froze the tab.
+ * Only the visible window is mounted now; spacer rows above and below preserve
+ * the scroll height, which keeps the table's own layout algorithm intact
+ * (absolutely positioning rows would break column alignment).
+ */
+function QueryResultsTable({
+  columns,
+  rows,
+}: Readonly<{ columns: string[]; rows: Record<string, unknown>[] }>) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => RESULT_ROW_HEIGHT,
+    overscan: 12,
+  });
+
+  const virtualRows = virtualizer.getVirtualItems();
+  const paddingTop = virtualRows.length > 0 ? virtualRows[0].start : 0;
+  const paddingBottom =
+    virtualRows.length > 0
+      ? virtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
+      : 0;
+
+  return (
+    <div ref={scrollRef} className="flex-1 overflow-auto min-h-0">
+      <Table>
+        <TableHeader className="sticky top-0 z-10 bg-muted">
+          <TableRow>
+            {columns.map((col) => (
+              <TableHead key={col} className="whitespace-nowrap">
+                {col}
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {paddingTop > 0 && (
+            <tr aria-hidden="true" style={{ height: paddingTop }}>
+              <td colSpan={columns.length} />
+            </tr>
+          )}
+          {virtualRows.map((virtualRow) => {
+            const row = rows[virtualRow.index];
+            return (
+              <TableRow key={virtualRow.index} style={{ height: RESULT_ROW_HEIGHT }}>
+                {columns.map((col) => (
+                  <TableCell key={col} className="py-1.5 whitespace-nowrap">
+                    <ResultCell value={row[col]} />
+                  </TableCell>
+                ))}
+              </TableRow>
+            );
+          })}
+          {paddingBottom > 0 && (
+            <tr aria-hidden="true" style={{ height: paddingBottom }}>
+              <td colSpan={columns.length} />
+            </tr>
+          )}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
 export function QueryEditor() {
   const activeConnection = useActiveConnection();
   const readOnlyMode = useReadOnlyMode();
-  const {
-    queryTabs,
-    activeQueryTabId,
-    addQueryTab,
-    removeQueryTab,
-    setActiveQueryTab,
-    updateQueryTab,
-    addToHistory,
-  } = useStudioStore();
+  const queryTabs = useStudioStore((s) => s.queryTabs);
+  const activeQueryTabId = useStudioStore((s) => s.activeQueryTabId);
+  const addQueryTab = useStudioStore((s) => s.addQueryTab);
+  const removeQueryTab = useStudioStore((s) => s.removeQueryTab);
+  const setActiveQueryTab = useStudioStore((s) => s.setActiveQueryTab);
+  const updateQueryTab = useStudioStore((s) => s.updateQueryTab);
+  const addToHistory = useStudioStore((s) => s.addToHistory);
 
   const activeTab = queryTabs.find((tab) => tab.id === activeQueryTabId);
 
@@ -162,6 +249,7 @@ export function QueryEditor() {
                         e.stopPropagation();
                         removeQueryTab(tab.id);
                       }}
+                      aria-label={`Close ${tab.name}`}
                       className="p-1 hover:bg-muted rounded"
                     >
                       <X className="h-3 w-3" />
@@ -176,6 +264,7 @@ export function QueryEditor() {
             size="icon"
             className="h-8 w-8 ml-1"
             onClick={() => addQueryTab()}
+            aria-label="New query tab"
           >
             <Plus className="h-4 w-4" />
           </Button>
@@ -240,51 +329,35 @@ export function QueryEditor() {
                   )}
                 </div>
 
-                {/* Results Content — native scroll container (mirrors data-viewer) */}
-                <div className="flex-1 overflow-auto min-h-0">
-                  {activeTab.result.error ? (
-                    <div className="p-4 text-destructive">
-                      <pre className="text-sm whitespace-pre-wrap">
-                        {activeTab.result.error}
-                      </pre>
-                    </div>
-                  ) : activeTab.result.rows.length === 0 ? (
-                    <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-                      Query executed successfully. No rows returned.
-                    </div>
-                  ) : (
-                    <Table>
-                      <TableHeader className="sticky top-0 z-10 bg-muted">
-                        <TableRow>
-                          {activeTab.result.columns.map((col) => (
-                            <TableHead key={col} className="whitespace-nowrap">
-                              {col}
-                            </TableHead>
-                          ))}
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {activeTab.result.rows.map((row, i) => (
-                          <TableRow key={i}>
-                            {activeTab.result!.columns.map((col) => (
-                              <TableCell key={col} className="py-1.5 whitespace-nowrap">
-                                {row[col] === null || row[col] === undefined ? (
-                                  <span className="text-muted-foreground italic">NULL</span>
-                                ) : typeof row[col] === 'object' ? (
-                                  <code className="text-xs bg-muted px-1 py-0.5 rounded">
-                                    {JSON.stringify(row[col])}
-                                  </code>
-                                ) : (
-                                  String(row[col])
-                                )}
-                              </TableCell>
-                            ))}
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  )}
-                </div>
+                {/* Truncation notice — the server caps what it sends back. */}
+                {activeTab.result.truncated && (
+                  <div className="flex items-center gap-2 px-3 py-2 text-xs bg-amber-500/10 border-b border-amber-500/20 text-amber-700 dark:text-amber-400 shrink-0">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      Showing the first {activeTab.result.rows.length.toLocaleString()} of{' '}
+                      {activeTab.result.totalRows?.toLocaleString()} rows. Add a
+                      LIMIT clause to narrow the result, or export to get everything.
+                    </span>
+                  </div>
+                )}
+
+                {/* Results Content */}
+                {activeTab.result.error ? (
+                  <div className="flex-1 overflow-auto min-h-0 p-4 text-destructive">
+                    <pre className="text-sm whitespace-pre-wrap">
+                      {activeTab.result.error}
+                    </pre>
+                  </div>
+                ) : activeTab.result.rows.length === 0 ? (
+                  <div className="flex-1 flex items-center justify-center min-h-0 text-muted-foreground text-sm">
+                    Query executed successfully. No rows returned.
+                  </div>
+                ) : (
+                  <QueryResultsTable
+                    columns={activeTab.result.columns}
+                    rows={activeTab.result.rows}
+                  />
+                )}
               </div>
             </ResizablePanel>
           </>

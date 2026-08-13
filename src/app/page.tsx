@@ -130,12 +130,10 @@ export default function Home() {
   const { setTheme } = useTheme();
   const [guideOpen, setGuideOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
-  const {
-    connections,
-    removeConnection,
-    updateConnection,
-    setActiveConnection,
-  } = useConnectionStore();
+  const connections = useConnectionStore((s) => s.connections);
+  const removeConnection = useConnectionStore((s) => s.removeConnection);
+  const updateConnection = useConnectionStore((s) => s.updateConnection);
+  const setActiveConnection = useConnectionStore((s) => s.setActiveConnection);
   const [connectingId, setConnectingId] = useState<string | null>(null);
 
   // Feedback form state

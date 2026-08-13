@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { create } from 'zustand';
 import { TableInfo, ColumnInfo, QueryResult } from '../adapters/types';
 
@@ -308,8 +309,15 @@ export const useFilteredTables = () => {
   const tables = useStudioStore((state) => state.tables);
   const filter = useStudioStore((state) => state.tableFilter);
 
-  if (!filter) return tables;
-
-  const lowerFilter = filter.toLowerCase();
-  return tables.filter((table) => table.name.toLowerCase().includes(lowerFilter));
+  // Memoized because the filtered branch allocates a new array on every call.
+  // Without this the sidebar received a new array identity on every render,
+  // defeating any downstream memoization and re-running the virtualizer's
+  // measurement for a list that had not actually changed.
+  return useMemo(() => {
+    if (!filter) return tables;
+    const lowerFilter = filter.toLowerCase();
+    return tables.filter((table) =>
+      table.name.toLowerCase().includes(lowerFilter)
+    );
+  }, [tables, filter]);
 };

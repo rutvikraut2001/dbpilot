@@ -28,7 +28,8 @@ export const ConnectionIdSchema = z
 
 export const QueryOptionsSchema = z.object({
   page: z.coerce.number().int().positive().default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(50),
+  // Ceiling matches MAX_PAGE_SIZE in the data route.
+  pageSize: z.coerce.number().int().min(1).max(500).default(50),
   sortBy: z
     .string()
     .regex(columnNameRegex, "Invalid sort column")

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useCallback, useState, useRef } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Table2,
   FileText,
@@ -66,26 +67,38 @@ export function TableBrowser() {
   const activeConnection = useActiveConnection();
   const readOnlyMode = useReadOnlyMode();
   const filteredTables = useFilteredTables();
-  const {
-    selectedTable,
-    setSelectedTable,
-    openTableTab,
-    setTables,
-    setTableSchema,
-    setActiveTab,
-    setSchemaFocusTable,
-    tableFilter,
-    setTableFilter,
-    isLoadingTables,
-    setIsLoadingTables,
-    setIsLoadingSchema,
-    setError,
-  } = useStudioStore();
+  // Per-field selectors: this component previously re-rendered on every store
+  // write, including each keystroke in its own filter box and every entry
+  // pushed onto the query history from a different tab.
+  const selectedTable = useStudioStore((s) => s.selectedTable);
+  const setSelectedTable = useStudioStore((s) => s.setSelectedTable);
+  const openTableTab = useStudioStore((s) => s.openTableTab);
+  const setTables = useStudioStore((s) => s.setTables);
+  const setActiveTab = useStudioStore((s) => s.setActiveTab);
+  const setSchemaFocusTable = useStudioStore((s) => s.setSchemaFocusTable);
+  const tableFilter = useStudioStore((s) => s.tableFilter);
+  const setTableFilter = useStudioStore((s) => s.setTableFilter);
+  const isLoadingTables = useStudioStore((s) => s.isLoadingTables);
+  const setIsLoadingTables = useStudioStore((s) => s.setIsLoadingTables);
+  const setError = useStudioStore((s) => s.setError);
 
   const [flushDialogOpen, setFlushDialogOpen] = useState(false);
   const [isFlushing, setIsFlushing] = useState(false);
   const [localFilter, setLocalFilter] = useState(tableFilter);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Virtualized table list. Every row previously mounted a ContextMenu, a
+  // Tooltip and a DropdownMenu — three Radix components each — so a database
+  // with a few hundred tables paid that cost for every one of them, whether
+  // on screen or not. Only the visible window is mounted now.
+  const listRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: filteredTables.length,
+    getScrollElement: () => listRef.current,
+    // Row is 32px tall plus the 4px gap that used to come from space-y-1.
+    estimateSize: () => 36,
+    overscan: 8,
+  });
 
   const handleFilterChange = useCallback((value: string) => {
     setLocalFilter(value);
@@ -126,37 +139,15 @@ export function TableBrowser() {
     }
   }, [activeConnection, setTables, setIsLoadingTables, setError]);
 
-  const fetchTableSchema = useCallback(
-    async (tableName: string) => {
-      if (!activeConnection) return;
-
-      setIsLoadingSchema(true);
-
-      try {
-        const response = await fetch(
-          `/api/schema?connectionId=${activeConnection.id}&table=${encodeURIComponent(tableName)}`
-        );
-        const data = await response.json();
-
-        if (!data.error) {
-          setTableSchema(data.schema);
-        }
-      } catch {
-        // schema load failed silently
-      } finally {
-        setIsLoadingSchema(false);
-      }
-    },
-    [activeConnection, setTableSchema, setIsLoadingSchema]
-  );
-
   useEffect(() => {
     fetchTables();
   }, [fetchTables]);
 
+  // Opening a tab is all that's needed: DataViewer fetches the schema for
+  // whichever table it is showing. This component used to fetch it as well, so
+  // every table click issued the same /api/schema request twice.
   const handleTableSelect = (tableName: string) => {
     openTableTab(tableName);
-    fetchTableSchema(tableName);
   };
 
   const handleShowDiagram = (tableName: string) => {
@@ -284,7 +275,7 @@ export function TableBrowser() {
       </div>
 
       {/* Table List */}
-      <ScrollArea className="flex-1 overflow-auto">
+      <ScrollArea className="flex-1 overflow-auto" viewportRef={listRef}>
         <div className="p-2">
           {isLoadingTables ? (
             <div className="flex items-center justify-center py-8 text-muted-foreground">
@@ -298,8 +289,12 @@ export function TableBrowser() {
                 : (isRedis ? 'No keys found' : 'No tables found')}
             </div>
           ) : (
-            <div className="space-y-1">
-              {filteredTables.map((table) => {
+            <div
+              className="relative"
+              style={{ height: rowVirtualizer.getTotalSize() }}
+            >
+              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                const table = filteredTables[virtualRow.index];
                 const isActive = selectedTable === table.name;
                 const TypeIcon =
                   table.type === 'keyspace'
@@ -315,7 +310,15 @@ export function TableBrowser() {
                 };
 
                 return (
-                  <ContextMenu key={table.name}>
+                  <div
+                    key={table.name}
+                    className="absolute left-0 top-0 w-full pb-1"
+                    style={{
+                      height: virtualRow.size,
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                  >
+                  <ContextMenu>
                     <ContextMenuTrigger asChild>
                       <div
                         className={cn(
@@ -454,6 +457,7 @@ export function TableBrowser() {
                       </ContextMenuItem>
                     </ContextMenuContent>
                   </ContextMenu>
+                  </div>
                 );
               })}
             </div>

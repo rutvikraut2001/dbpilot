@@ -4,10 +4,29 @@ import { QueryOptions } from "@/lib/adapters/types";
 import { isReadOnlyMode } from "@/lib/server-state";
 import { audit } from "@/lib/audit";
 import {
+  schemaCache,
+  cacheKey,
+  CACHE_TTL,
+  filtersCacheKey,
+} from "@/lib/cache";
+import {
   sanitizeError,
   TableNameSchema,
   ConnectionIdSchema,
 } from "@/lib/validation";
+
+// Rows per page the API will serve. Raised from 100 now that the grid
+// virtualizes: rendering cost no longer scales with page size, so fewer, larger
+// pages mean fewer round trips while browsing.
+const MAX_PAGE_SIZE = 500;
+
+/**
+ * Drop cached row counts for a table after it is written to, so the pagination
+ * footer doesn't keep reporting a stale total.
+ */
+function invalidateRowCount(connectionId: string, table: string): void {
+  schemaCache.deleteByPrefix(cacheKey.rowCountPrefix(connectionId, table));
+}
 
 // Get paginated data from a table
 export async function GET(request: NextRequest) {
@@ -62,23 +81,49 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    const effectivePageSize = Math.min(pageSize, MAX_PAGE_SIZE);
+
+    // COUNT(*) scans where the page fetch does not, and on a large table it
+    // dominates the cost of paging. The total only changes when the data does,
+    // so cache it per (connection, table, filters) and let subsequent pages skip
+    // the count entirely. Writes to the table invalidate it.
+    const countKey = cacheKey.rowCount(
+      connectionId!,
+      tableName!,
+      filtersCacheKey(filters)
+    );
+    const cachedTotal = schemaCache.get<number>(countKey);
+
     const options: QueryOptions = {
       page,
-      pageSize: Math.min(pageSize, 100), // Max 100 rows per page
+      pageSize: effectivePageSize,
       sortBy,
       sortOrder,
       filters,
+      includeTotal: cachedTotal === undefined,
     };
 
     const result = await adapter.getRows(tableName!, options);
 
+    let total: number;
+    if (cachedTotal === undefined) {
+      total = result.total;
+      schemaCache.set(countKey, total, CACHE_TTL.ROW_COUNT);
+    } else {
+      total = cachedTotal;
+    }
+
     audit("data.read", {
       connectionId: connectionId!,
-      details: { table: tableName, page, pageSize },
+      details: { table: tableName, page, pageSize: effectivePageSize },
       success: true,
     });
 
-    return NextResponse.json(result);
+    return NextResponse.json({
+      ...result,
+      total,
+      totalPages: Math.ceil(total / effectivePageSize),
+    });
   } catch (error) {
     console.error("Get data error:", error);
 
@@ -147,6 +192,8 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await adapter.insertRow(table!, data);
+
+    invalidateRowCount(connectionId!, table!);
 
     audit("data.insert", {
       connectionId,
@@ -252,6 +299,8 @@ export async function PUT(request: NextRequest) {
 
     const result = await adapter.updateRow(table!, primaryKey, updateData);
 
+    invalidateRowCount(connectionId!, table!);
+
     audit("data.update", {
       connectionId,
       details: { table },
@@ -340,6 +389,8 @@ export async function DELETE(request: NextRequest) {
     }
 
     const success = await adapter.deleteRow(table!, primaryKey);
+
+    invalidateRowCount(connectionId!, table!);
 
     audit("data.delete", {
       connectionId: connectionId!,

@@ -37,9 +37,32 @@ export function rowsToCsv(rows: Row[], columns?: string[]): string {
   ].join('\n');
 }
 
+/** The CSV header line for a fixed set of columns. */
+export function csvHeader(columns: string[]): string {
+  return columns.map(csvEscape).join(',');
+}
+
+/**
+ * Serialize rows without a header, against an explicit column list.
+ *
+ * Streaming exports pin the columns from the first page and reuse them for
+ * every later chunk, so a document with a different key set (MongoDB) lines up
+ * with the header already sent instead of shifting the columns mid-file.
+ */
+export function csvRows(rows: Row[], columns: string[]): string {
+  return rows
+    .map((row) => columns.map((h) => csvEscape(row[h])).join(','))
+    .join('\n');
+}
+
 /** Serialize rows to a pretty-printed JSON string. */
 export function rowsToJson(rows: Row[]): string {
   return JSON.stringify(rows, jsonReplacer, 2);
+}
+
+/** Serialize a single row to a compact JSON string, for streaming output. */
+export function rowToJson(row: Row): string {
+  return JSON.stringify(row, jsonReplacer);
 }
 
 // BigInt is not serializable by JSON.stringify — coerce to string.

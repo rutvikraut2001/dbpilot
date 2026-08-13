@@ -81,7 +81,7 @@ interface DatabaseSwitcherProps {
 export function DatabaseSwitcher({ activeConnection }: DatabaseSwitcherProps) {
   const router = useRouter();
   const connections = useConnections();
-  const { setActiveConnection } = useConnectionStore();
+  const setActiveConnection = useConnectionStore((s) => s.setActiveConnection);
   const reset = useStudioStore((s) => s.reset);
 
   const [switchingTo, setSwitchingTo] = useState<string | null>(null);

@@ -356,3 +356,293 @@ export function isWriteRedisCommand(query: string): boolean {
   if (!command) return false;
   return REDIS_WRITE_COMMANDS.has(command);
 }
+
+// ─── Risk assessment ────────────────────────────────────────────────────────
+//
+// Classifies a statement so the UI can ask for confirmation before running
+// something destructive. This is advisory: it decides whether to *prompt*, never
+// whether to allow. Read-only enforcement is a separate, engine-level guarantee.
+
+export type RiskLevel = "safe" | "warn" | "dangerous";
+
+export interface StatementRisk {
+  level: RiskLevel;
+  /** Leading verb / command, uppercased. Empty for an unrecognized statement. */
+  verb: string;
+  /** Why it was flagged, in terms worth showing a user. */
+  reasons: string[];
+  /**
+   * Whether asking the database to estimate affected rows is meaningful.
+   * True only for scoped DML — there is nothing useful to plan for a DROP.
+   */
+  canEstimateRows: boolean;
+}
+
+const SAFE: StatementRisk = {
+  level: "safe",
+  verb: "",
+  reasons: [],
+  canEstimateRows: false,
+};
+
+/**
+ * True if `keyword` appears outside any parentheses.
+ *
+ * Depth matters: `UPDATE t SET x = (SELECT y FROM z WHERE ...)` contains WHERE,
+ * but not one that scopes the UPDATE — treating it as scoped would skip the
+ * warning on a statement that rewrites every row.
+ */
+export function hasTopLevelKeyword(sql: string, keyword: string): boolean {
+  const normalized = sqlWithoutNoise(sql).toUpperCase();
+  const pattern = new RegExp(`(^|[^A-Z_])${keyword}([^A-Z_]|$)`);
+  let depth = 0;
+  let segmentStart = 0;
+
+  for (let i = 0; i < normalized.length; i++) {
+    const ch = normalized[i];
+    if (ch === "(") {
+      if (depth === 0 && pattern.test(normalized.slice(segmentStart, i))) {
+        return true;
+      }
+      depth++;
+    } else if (ch === ")") {
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) segmentStart = i + 1;
+    }
+  }
+
+  return depth === 0 && pattern.test(normalized.slice(segmentStart));
+}
+
+function leadingVerb(sql: string): string {
+  const normalized = sqlWithoutNoise(sql)
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase()
+    .replace(/^[(\s]+/, "");
+  return /^[A-Z]+/.exec(normalized)?.[0] ?? "";
+}
+
+/** Assess a single SQL statement. */
+export function assessSqlRisk(sql: string): StatementRisk {
+  const statements = splitSqlStatements(sql);
+  if (statements.length === 0) return SAFE;
+
+  // A batch is as risky as its riskiest statement.
+  if (statements.length > 1) {
+    const assessed = statements.map(assessSqlRisk);
+    const worst =
+      assessed.find((r) => r.level === "dangerous") ??
+      assessed.find((r) => r.level === "warn");
+    if (!worst) return { ...SAFE, verb: assessed[0]?.verb ?? "" };
+    return {
+      ...worst,
+      reasons: [
+        `Runs ${statements.length} statements in one batch.`,
+        ...worst.reasons,
+      ],
+      // Estimating one statement of a batch would be misleading.
+      canEstimateRows: false,
+    };
+  }
+
+  const statement = statements[0];
+  const verb = leadingVerb(statement);
+  const normalized = sqlWithoutNoise(statement).replace(/\s+/g, " ").toUpperCase();
+
+  switch (verb) {
+    case "DROP": {
+      const target = /^DROP\s+(\w+)/.exec(normalized.trim())?.[1] ?? "object";
+      return {
+        level: "dangerous",
+        verb,
+        reasons: [`Permanently drops a ${target.toLowerCase()}. This cannot be undone.`],
+        canEstimateRows: false,
+      };
+    }
+
+    case "TRUNCATE":
+      return {
+        level: "dangerous",
+        verb,
+        reasons: [
+          "Removes every row in the table. This cannot be undone and does not fire row triggers.",
+        ],
+        canEstimateRows: false,
+      };
+
+    case "DELETE":
+      if (!hasTopLevelKeyword(statement, "WHERE")) {
+        return {
+          level: "dangerous",
+          verb,
+          reasons: ["No WHERE clause — this deletes every row in the table."],
+          canEstimateRows: true,
+        };
+      }
+      return {
+        level: "warn",
+        verb,
+        reasons: ["Deletes rows matching the WHERE clause."],
+        canEstimateRows: true,
+      };
+
+    case "UPDATE":
+      if (!hasTopLevelKeyword(statement, "WHERE")) {
+        return {
+          level: "dangerous",
+          verb,
+          reasons: ["No WHERE clause — this rewrites every row in the table."],
+          canEstimateRows: true,
+        };
+      }
+      return {
+        level: "warn",
+        verb,
+        reasons: ["Updates rows matching the WHERE clause."],
+        canEstimateRows: true,
+      };
+
+    case "ALTER":
+      if (/\bDROP\s+(COLUMN|CONSTRAINT)\b/.test(normalized)) {
+        return {
+          level: "dangerous",
+          verb,
+          reasons: ["Drops a column or constraint, discarding its data."],
+          canEstimateRows: false,
+        };
+      }
+      return {
+        level: "warn",
+        verb,
+        reasons: ["Changes the table definition."],
+        canEstimateRows: false,
+      };
+
+    case "GRANT":
+    case "REVOKE":
+      return {
+        level: "warn",
+        verb,
+        reasons: ["Changes access permissions."],
+        canEstimateRows: false,
+      };
+
+    case "DO":
+    case "CALL":
+      return {
+        level: "warn",
+        verb,
+        reasons: [
+          "Runs procedural code whose effects cannot be determined in advance.",
+        ],
+        canEstimateRows: false,
+      };
+
+    case "INSERT":
+      return {
+        level: "warn",
+        verb,
+        reasons: ["Inserts new rows."],
+        canEstimateRows: false,
+      };
+
+    default:
+      return { ...SAFE, verb };
+  }
+}
+
+const MONGO_DANGEROUS = ["drop", "dropDatabase", "dropIndexes"] as const;
+
+/** Assess a MongoDB shell-style query. */
+export function assessMongoRisk(query: string): StatementRisk {
+  const operation =
+    /\.([a-zA-Z]+)\(/.exec(query)?.[1] ?? "";
+
+  if (MONGO_DANGEROUS.some((op) => query.includes(`.${op}(`))) {
+    return {
+      level: "dangerous",
+      verb: operation,
+      reasons: ["Drops a collection or database. This cannot be undone."],
+      canEstimateRows: false,
+    };
+  }
+
+  // deleteMany({}) / updateMany({}) with an empty filter touches every document.
+  if (/\.(deleteMany|updateMany)\(\s*\{\s*\}/.test(query)) {
+    return {
+      level: "dangerous",
+      verb: operation,
+      reasons: ["Empty filter — this affects every document in the collection."],
+      canEstimateRows: false,
+    };
+  }
+
+  if (isWriteMongoQuery(query)) {
+    return {
+      level: "warn",
+      verb: operation,
+      reasons: ["Modifies documents."],
+      canEstimateRows: false,
+    };
+  }
+
+  return SAFE;
+}
+
+const REDIS_DANGEROUS = new Set([
+  "FLUSHALL",
+  "FLUSHDB",
+  "SHUTDOWN",
+  "CONFIG",
+  "SWAPDB",
+  "REPLICAOF",
+  "SLAVEOF",
+  "SCRIPT",
+  "FUNCTION",
+  "ACL",
+]);
+
+/** Assess a Redis command. */
+export function assessRedisRisk(query: string): StatementRisk {
+  const command = query.trim().split(/\s+/)[0]?.toUpperCase() ?? "";
+  if (!command) return SAFE;
+
+  if (REDIS_DANGEROUS.has(command)) {
+    return {
+      level: "dangerous",
+      verb: command,
+      reasons:
+        command === "FLUSHALL"
+          ? ["Deletes every key in every database on this server."]
+          : [`${command} affects the whole server or database.`],
+      canEstimateRows: false,
+    };
+  }
+
+  if (isWriteRedisCommand(query)) {
+    return {
+      level: "warn",
+      verb: command,
+      reasons: ["Modifies keys."],
+      canEstimateRows: false,
+    };
+  }
+
+  return { ...SAFE, verb: command };
+}
+
+/** Assess a query using the inspection appropriate to the dialect. */
+export function assessRisk(
+  query: string,
+  dialect: "sql" | "mongodb" | "redis"
+): StatementRisk {
+  switch (dialect) {
+    case "sql":
+      return assessSqlRisk(query);
+    case "mongodb":
+      return assessMongoRisk(query);
+    case "redis":
+      return assessRedisRisk(query);
+  }
+}

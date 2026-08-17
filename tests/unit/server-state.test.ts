@@ -103,3 +103,95 @@ describe("read-only state (FORCE_READ_ONLY=true)", () => {
     expect(state.initReadOnlyMode(CONN)).toBe(true);
   });
 });
+
+describe("time-boxed write access", () => {
+  beforeEach(() => {
+    delete process.env.FORCE_READ_ONLY;
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("grants writes for the requested window", async () => {
+    const state = await loadServerState();
+    state.setReadOnlyMode(CONN, false, { durationMinutes: 15 });
+
+    expect(state.isReadOnlyMode(CONN)).toBe(false);
+
+    const access = state.getWriteAccess(CONN);
+    expect(access.readOnly).toBe(false);
+    expect(access.writeExpiresAt).toBeGreaterThan(Date.now());
+  });
+
+  it("reverts to read-only once the window lapses", async () => {
+    // The point of a time box: it expires on its own, with nothing running.
+    vi.useFakeTimers();
+    const state = await loadServerState();
+    state.setReadOnlyMode(CONN, false, { durationMinutes: 15 });
+    expect(state.isReadOnlyMode(CONN)).toBe(false);
+
+    vi.advanceTimersByTime(14 * 60_000);
+    expect(state.isReadOnlyMode(CONN)).toBe(false);
+
+    vi.advanceTimersByTime(2 * 60_000);
+    expect(state.isReadOnlyMode(CONN)).toBe(true);
+  });
+
+  it("reports an expired grant as read-only with no expiry", async () => {
+    vi.useFakeTimers();
+    const state = await loadServerState();
+    state.setReadOnlyMode(CONN, false, { durationMinutes: 5 });
+
+    vi.advanceTimersByTime(6 * 60_000);
+
+    expect(state.getWriteAccess(CONN)).toEqual({ readOnly: true });
+  });
+
+  it("keeps an open-ended grant when no duration is given", async () => {
+    vi.useFakeTimers();
+    const state = await loadServerState();
+    state.setReadOnlyMode(CONN, false);
+
+    vi.advanceTimersByTime(24 * 60 * 60_000);
+
+    expect(state.isReadOnlyMode(CONN)).toBe(false);
+    expect(state.getWriteAccess(CONN).writeExpiresAt).toBeUndefined();
+  });
+
+  it("records the reason alongside the grant", async () => {
+    const state = await loadServerState();
+    state.setReadOnlyMode(CONN, false, {
+      durationMinutes: 30,
+      reason: "fixing a stuck order",
+    });
+
+    expect(state.getWriteAccess(CONN).reason).toBe("fixing a stuck order");
+  });
+
+  it("clears the expiry when read-only is turned back on", async () => {
+    const state = await loadServerState();
+    state.setReadOnlyMode(CONN, false, { durationMinutes: 30 });
+    state.setReadOnlyMode(CONN, true);
+
+    expect(state.getWriteAccess(CONN)).toEqual({ readOnly: true });
+  });
+
+  it("ignores a duration under FORCE_READ_ONLY", async () => {
+    const state = await loadServerState({ forceReadOnly: true });
+    state.setReadOnlyMode(CONN, false, { durationMinutes: 60 });
+
+    expect(state.isReadOnlyMode(CONN)).toBe(true);
+    expect(state.getWriteAccess(CONN)).toEqual({ readOnly: true });
+  });
+
+  it("does not resurrect a lapsed grant on reconnect", async () => {
+    vi.useFakeTimers();
+    const state = await loadServerState();
+    state.setReadOnlyMode(CONN, false, { durationMinutes: 5 });
+    vi.advanceTimersByTime(6 * 60_000);
+
+    expect(state.initReadOnlyMode(CONN)).toBe(true);
+  });
+});

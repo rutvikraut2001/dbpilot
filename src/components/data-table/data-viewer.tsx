@@ -15,6 +15,8 @@ import {
   X,
   XCircle,
   Pencil,
+  AlertCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -30,9 +32,10 @@ import {
 } from '@/components/ui/tooltip';
 import { useStudioStore } from '@/lib/stores/studio';
 import { useActiveConnection, useReadOnlyMode } from '@/lib/stores/connection';
-import { PaginatedResult } from '@/lib/adapters/types';
+import { PaginatedResult, ColumnInfo } from '@/lib/adapters/types';
 import { cn } from '@/lib/utils';
 import { rowsToCsv, rowsToJson, exportFilename } from '@/lib/utils/export';
+import { apiFetch, errorMessage } from '@/lib/utils/api-client';
 import { toast } from 'sonner';
 import { SmartCellDisplay, RedisCellDisplay } from './cell-renderer';
 import { EditRowDialog, EditSingleFieldDialog } from './edit-row-drawer';
@@ -362,6 +365,7 @@ function DataTable({
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<string | undefined>();
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
@@ -414,18 +418,19 @@ function DataTable({
         );
       }
 
-      const response = await fetch(`/api/data?${params}`);
-      const result: PaginatedResult = await response.json();
-
-      if (!result.data) {
-        return;
-      }
+      const result = await apiFetch<PaginatedResult>(`/api/data?${params}`);
 
       setData(result.data);
       setTotalRows(result.total);
       setRowSelection({});
-    } catch {
-      // fetch error — silently fail, toolbar shows stale state
+      setLoadError(null);
+    } catch (error) {
+      // Previously swallowed: a failed load left the previous rows on screen, or
+      // an empty grid reading "No data found", with no indication anything had
+      // gone wrong. Surface it and let the user retry.
+      setLoadError(errorMessage(error));
+      setData([]);
+      setTotalRows(0);
     } finally {
       setIsLoading(false);
     }
@@ -455,12 +460,20 @@ function DataTable({
     let cancelled = false;
     setTableSchema([]);
     setIsLoadingSchema(true);
-    fetch(`/api/schema?connectionId=${connectionId}&table=${encodeURIComponent(tableName)}`)
-      .then((r) => r.json())
+    apiFetch<{ schema: ColumnInfo[] }>(
+      `/api/schema?connectionId=${connectionId}&table=${encodeURIComponent(tableName)}`
+    )
       .then((data) => {
-        if (!cancelled && !data.error) setTableSchema(data.schema);
+        if (!cancelled) setTableSchema(data.schema);
       })
-      .catch(() => { /* silent — toolbar shows stale state */ })
+      .catch((error) => {
+        // Without the schema there are no primary keys, so editing and deleting
+        // silently stop working. Say so rather than leaving a dead UI.
+        if (cancelled) return;
+        toast.error('Could not load table structure', {
+          description: errorMessage(error),
+        });
+      })
       .finally(() => { if (!cancelled) setIsLoadingSchema(false); });
     return () => { cancelled = true; };
   }, [tableName, activeConnection?.id, setTableSchema, setIsLoadingSchema]);
@@ -861,11 +874,39 @@ function DataTable({
                   </tr>
                 );
               }
+              // An empty table and a failed request are different things and
+              // used to render identically as "No data found".
+              if (loadError) {
+                return (
+                  <tr>
+                    <td colSpan={colSpan} className="h-32 px-4 text-center">
+                      <div className="flex flex-col items-center gap-2">
+                        <div className="flex items-center gap-2 text-destructive">
+                          <AlertCircle className="h-4 w-4 shrink-0" />
+                          <span className="text-sm font-medium">
+                            Could not load rows
+                          </span>
+                        </div>
+                        <p className="max-w-md text-xs text-muted-foreground break-words">
+                          {loadError}
+                        </p>
+                        <Button variant="outline" size="sm" onClick={fetchData}>
+                          <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                          Retry
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              }
+
               if (tableRows.length === 0) {
                 return (
                   <tr>
                     <td colSpan={colSpan} className="h-32 text-center text-muted-foreground">
-                      No data found
+                      {filter
+                        ? `No rows where ${filter.column} = ${displayRowKey(filter.value)}`
+                        : 'This table is empty'}
                     </td>
                   </tr>
                 );

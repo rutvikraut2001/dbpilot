@@ -70,8 +70,10 @@ invalidation prefix covers its own keys without matching a similarly-named table
 **`tests/integration/postgres-performance.test.ts`** — `includeTotal` returns the
 same page with or without the count; `orderBy` is deterministic, validated, and
 covers every row exactly once across a full walk; `deleteRows` removes exactly
-the rows given in a single statement and rolls back entirely on failure.
-Requires `TEST_POSTGRES_URL`.
+the rows given in a single statement and rolls back entirely on failure. Also
+`estimateAffectedRows`: it reports 1000 rows for an unscoped DELETE **and the
+table still holds 1000 rows afterwards**, which is the property that makes the
+preview safe. Requires `TEST_POSTGRES_URL`.
 
 **`tests/e2e`** — the workflows a user actually performs: connecting, browsing,
 paginating, sorting, following a foreign key, editing and deleting rows, bulk
@@ -82,6 +84,32 @@ a reload. Requires `E2E_POSTGRES_URL`.
 row count stays bounded no matter how large the result. A 5000-row query mounts
 ~19 rows. Asserted on DOM row count rather than timing, so a regression that
 reverts to rendering every row fails loudly instead of just being slow.
+
+**`tests/unit/api-client.test.ts`** — the shared fetch wrapper: transport
+failures, non-2xx bodies, 429s with and without `Retry-After`, and a 2xx body
+that carries an `error` field (several routes report failures that way and
+callers used to read straight past it).
+
+**`tests/e2e/error-handling.spec.ts`** — failures are visible and recoverable.
+Intercepts requests to force a 500, a 429 and a dropped connection, then asserts
+the UI names the problem, offers a retry, and does *not* show the empty-state
+message. Also asserts the inverse: a genuinely empty table reads as empty.
+
+**`tests/e2e/workspace-persistence.spec.ts`** — open tabs, unsaved query text and
+the sidebar layout survive a reload; query *results* are not written to
+localStorage; and tabs belonging to a different connection are not restored.
+
+**`tests/unit/query-risk.test.ts`** — the destructive-statement classifier:
+DELETE/UPDATE without a top-level WHERE, DROP, TRUNCATE, `ALTER ... DROP COLUMN`,
+Mongo `drop()`/empty-filter bulk writes, Redis `FLUSHALL`. Includes the
+parenthesis-depth cases — `UPDATE t SET x = (SELECT ... WHERE ...)` has no WHERE
+of its own and must still be flagged as unscoped.
+
+**`tests/e2e/query-safety.spec.ts`** — the confirmation gate end to end: a SELECT
+runs unprompted; an unscoped DELETE requires the verb typed before the button
+enables; cancelling leaves the data intact; a scoped DELETE shows an estimated
+row count labelled as an estimate. Also the production treatment (stripe, badge,
+required reason) and that a write grant is time-boxed with a live countdown.
 
 **`tests/e2e/request-efficiency.spec.ts`** — guards against redundant network
 work: opening a table fetches its schema once (the sidebar and the data viewer

@@ -18,6 +18,10 @@ interface ConnectionState {
   // enabled at all. Never persisted; always read from the server.
   forceReadOnly: boolean;
 
+  // When temporary write access lapses (ms since epoch), or null for an
+  // open-ended grant. Mirrors the server, which does the actual enforcing.
+  writeExpiresAt: number | null;
+
   // Hydration state (for SSR/refresh handling)
   _hasHydrated: boolean;
 
@@ -27,7 +31,10 @@ interface ConnectionState {
   removeConnection: (id: string) => void;
   setActiveConnection: (id: string | null) => void;
   toggleReadOnlyMode: () => Promise<void>;
-  setReadOnlyMode: (value: boolean) => Promise<void>;
+  setReadOnlyMode: (
+    value: boolean,
+    options?: { durationMinutes?: number; reason?: string }
+  ) => Promise<void>;
   syncReadOnlyMode: (connectionId: string) => Promise<void>;
   getConnection: (id: string) => ConnectionConfig | undefined;
   getActiveConnection: () => ConnectionConfig | undefined;
@@ -46,6 +53,7 @@ export const useConnectionStore = create<ConnectionState>()(
       // it has no recorded state for.
       readOnlyMode: true,
       forceReadOnly: false,
+      writeExpiresAt: null,
       _hasHydrated: false,
 
       setHasHydrated: (state: boolean) => {
@@ -93,11 +101,11 @@ export const useConnectionStore = create<ConnectionState>()(
        * enable writes (FORCE_READ_ONLY) or the request fails, the UI stays on
        * the safe value rather than showing a permission the server won't honor.
        */
-      setReadOnlyMode: async (value) => {
+      setReadOnlyMode: async (value, options) => {
         const { activeConnectionId } = get();
 
         if (!activeConnectionId) {
-          set({ readOnlyMode: value });
+          set({ readOnlyMode: value, writeExpiresAt: null });
           return;
         }
 
@@ -108,6 +116,8 @@ export const useConnectionStore = create<ConnectionState>()(
             body: JSON.stringify({
               connectionId: activeConnectionId,
               readOnly: value,
+              durationMinutes: options?.durationMinutes,
+              reason: options?.reason,
             }),
           });
 
@@ -117,15 +127,16 @@ export const useConnectionStore = create<ConnectionState>()(
             set({
               readOnlyMode: data.readOnly,
               forceReadOnly: data.forceReadOnly === true,
+              writeExpiresAt: data.writeExpiresAt ?? null,
             });
             return;
           }
 
           // Server gave us nothing usable — fail closed.
-          set({ readOnlyMode: true });
+          set({ readOnlyMode: true, writeExpiresAt: null });
         } catch (error) {
           console.error('Failed to sync read-only mode with server:', error);
-          set({ readOnlyMode: true });
+          set({ readOnlyMode: true, writeExpiresAt: null });
         }
       },
 
@@ -145,6 +156,7 @@ export const useConnectionStore = create<ConnectionState>()(
             set({
               readOnlyMode: data.readOnly,
               forceReadOnly: data.forceReadOnly === true,
+              writeExpiresAt: data.writeExpiresAt ?? null,
             });
           }
         } catch (error) {
@@ -187,6 +199,7 @@ export const useConnectionStore = create<ConnectionState>()(
           ...saved,
           readOnlyMode: current.readOnlyMode,
           forceReadOnly: current.forceReadOnly,
+          writeExpiresAt: current.writeExpiresAt,
         };
       },
       onRehydrateStorage: () => (state) => {
@@ -215,4 +228,6 @@ export const useActiveConnection = () => {
 export const useConnections = () => useConnectionStore((state) => state.connections);
 export const useReadOnlyMode = () => useConnectionStore((state) => state.readOnlyMode);
 export const useForceReadOnly = () => useConnectionStore((state) => state.forceReadOnly);
+export const useWriteExpiresAt = () =>
+  useConnectionStore((state) => state.writeExpiresAt);
 export const useHasHydrated = () => useConnectionStore((state) => state._hasHydrated);

@@ -18,6 +18,7 @@ import {
   PanelRightOpen,
   FileJson,
   FileSpreadsheet,
+  AlertCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Input } from '@/components/ui/input';
@@ -61,7 +62,9 @@ import {
 import { useStudioStore, useFilteredTables } from '@/lib/stores/studio';
 import { useActiveConnection, useReadOnlyMode } from '@/lib/stores/connection';
 import { cn, formatBytes } from '@/lib/utils';
+import { apiFetch, errorMessage } from '@/lib/utils/api-client';
 import { TABLE_DRAG_MIME } from '@/lib/constants';
+import { TableInfo } from '@/lib/adapters/types';
 
 export function TableBrowser() {
   const activeConnection = useActiveConnection();
@@ -81,6 +84,7 @@ export function TableBrowser() {
   const isLoadingTables = useStudioStore((s) => s.isLoadingTables);
   const setIsLoadingTables = useStudioStore((s) => s.setIsLoadingTables);
   const setError = useStudioStore((s) => s.setError);
+  const error = useStudioStore((s) => s.error);
 
   const [flushDialogOpen, setFlushDialogOpen] = useState(false);
   const [isFlushing, setIsFlushing] = useState(false);
@@ -122,18 +126,12 @@ export function TableBrowser() {
     setError(null);
 
     try {
-      const response = await fetch(
+      const data = await apiFetch<{ tables: TableInfo[] }>(
         `/api/tables?connectionId=${activeConnection.id}`
       );
-      const data = await response.json();
-
-      if (data.error) {
-        setError(data.error);
-      } else {
-        setTables(data.tables);
-      }
-    } catch {
-      setError('Failed to load tables');
+      setTables(data.tables);
+    } catch (err) {
+      setError(errorMessage(err));
     } finally {
       setIsLoadingTables(false);
     }
@@ -183,7 +181,7 @@ export function TableBrowser() {
 
     setIsFlushing(true);
     try {
-      const response = await fetch('/api/redis', {
+      await apiFetch<{ success: boolean }>('/api/redis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -192,16 +190,12 @@ export function TableBrowser() {
         }),
       });
 
-      const result = await response.json();
-      if (result.success) {
-        setFlushDialogOpen(false);
-        setSelectedTable('');
-        fetchTables();
-      } else {
-        alert(result.error || 'Failed to flush database');
-      }
-    } catch {
-      alert('Failed to flush database');
+      setFlushDialogOpen(false);
+      setSelectedTable('');
+      toast.success('Database flushed');
+      fetchTables();
+    } catch (err) {
+      toast.error('Failed to flush database', { description: errorMessage(err) });
     } finally {
       setIsFlushing(false);
     }
@@ -228,6 +222,7 @@ export function TableBrowser() {
                       size="icon"
                       className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
                       onClick={() => setFlushDialogOpen(true)}
+                      aria-label="Flush current database"
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -245,6 +240,7 @@ export function TableBrowser() {
                     className="h-7 w-7"
                     onClick={fetchTables}
                     disabled={isLoadingTables}
+                    aria-label={isRedis ? 'Refresh key patterns' : 'Refresh tables'}
                   >
                     <RefreshCw
                       className={cn(
@@ -281,6 +277,21 @@ export function TableBrowser() {
             <div className="flex items-center justify-center py-8 text-muted-foreground">
               <RefreshCw className="h-4 w-4 animate-spin mr-2" />
               Loading...
+            </div>
+          ) : error ? (
+            // This branch used to not exist: a failed load wrote to the store's
+            // `error` field, which nothing read, so the sidebar just said
+            // "No tables found" as though the database were empty.
+            <div className="flex flex-col items-center gap-2 px-2 py-8 text-center">
+              <AlertCircle className="h-5 w-5 text-destructive" />
+              <p className="text-sm font-medium">
+                {isRedis ? 'Could not load keys' : 'Could not load tables'}
+              </p>
+              <p className="text-xs text-muted-foreground break-words">{error}</p>
+              <Button variant="outline" size="sm" onClick={fetchTables}>
+                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                Retry
+              </Button>
             </div>
           ) : filteredTables.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground text-sm">

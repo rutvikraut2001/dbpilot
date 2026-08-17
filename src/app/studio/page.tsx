@@ -17,6 +17,7 @@ import {
   Moon,
   Monitor,
   Loader2,
+  ShieldAlert,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -44,11 +45,14 @@ import {
   useActiveConnection,
   useReadOnlyMode,
   useForceReadOnly,
+  useWriteExpiresAt,
   useHasHydrated,
 } from '@/lib/stores/connection';
 import { useStudioStore, TabType } from '@/lib/stores/studio';
 import { ConnectionConfig } from '@/lib/adapters/types';
 import { useConnectionHealth, ConnectionHealthStatus } from '@/hooks/use-connection-health';
+import { environmentStyle, isProduction } from '@/lib/utils/environment';
+import { WriteAccessDialog } from '@/components/connection/write-access-dialog';
 import { toast } from 'sonner';
 
 export default function StudioPage() {
@@ -58,14 +62,18 @@ export default function StudioPage() {
   const activeConnection = useActiveConnection();
   const readOnlyMode = useReadOnlyMode();
   const forceReadOnly = useForceReadOnly();
+  const writeExpiresAt = useWriteExpiresAt();
   // Per-field selectors rather than whole-store subscriptions: actions are
   // stable references, so only real state changes re-render this component.
   const setActiveConnection = useConnectionStore((s) => s.setActiveConnection);
-  const toggleReadOnlyMode = useConnectionStore((s) => s.toggleReadOnlyMode);
+  const setReadOnlyMode = useConnectionStore((s) => s.setReadOnlyMode);
   const syncReadOnlyMode = useConnectionStore((s) => s.syncReadOnlyMode);
   const activeTab = useStudioStore((s) => s.activeTab);
   const setActiveTab = useStudioStore((s) => s.setActiveTab);
   const sidebarOpen = useStudioStore((s) => s.sidebarOpen);
+  const sidebarWidth = useStudioStore((s) => s.sidebarWidth);
+  const setSidebarWidth = useStudioStore((s) => s.setSidebarWidth);
+  const hydrateForConnection = useStudioStore((s) => s.hydrateForConnection);
   const setSidebarOpen = useStudioStore((s) => s.setSidebarOpen);
   const reset = useStudioStore((s) => s.reset);
 
@@ -109,8 +117,49 @@ export default function StudioPage() {
     }
   }, [healthStatus]);
 
-  // Sidebar resize state
-  const [sidebarWidth, setSidebarWidth] = useState(280);
+  // Enabling writes goes through a dialog that picks a duration; turning them
+  // back off is immediate.
+  const [writeDialogOpen, setWriteDialogOpen] = useState(false);
+
+  const handleReadOnlyToggle = useCallback(() => {
+    if (readOnlyMode) {
+      setWriteDialogOpen(true);
+      return;
+    }
+    setReadOnlyMode(true);
+  }, [readOnlyMode, setReadOnlyMode]);
+
+  // Countdown on the remaining grant. Re-rendered every second only while a
+  // grant is actually active.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (readOnlyMode || writeExpiresAt === null) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [readOnlyMode, writeExpiresAt]);
+
+  // When the grant lapses, ask the server for the truth rather than assuming.
+  useEffect(() => {
+    if (readOnlyMode || writeExpiresAt === null) return;
+    if (now < writeExpiresAt) return;
+    if (!activeConnection) return;
+
+    syncReadOnlyMode(activeConnection.id);
+    toast.info('Write access expired', {
+      description: 'The connection is read-only again.',
+    });
+  }, [now, writeExpiresAt, readOnlyMode, activeConnection, syncReadOnlyMode]);
+
+  const remainingLabel = (() => {
+    if (readOnlyMode || writeExpiresAt === null) return null;
+    const seconds = Math.max(0, Math.ceil((writeExpiresAt - now) / 1000));
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
+  })();
+
+  // Sidebar resize state. Width lives in the store so it persists across
+  // reloads — setSidebarWidth was previously dead code while this component
+  // kept its own copy.
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
 
@@ -132,7 +181,7 @@ export default function StudioPage() {
         }
       }
     },
-    [isResizing]
+    [isResizing, setSidebarWidth]
   );
 
   useEffect(() => {
@@ -208,13 +257,14 @@ export default function StudioPage() {
 
     if (activeConnection) {
       reconnectAttempted.current = true;
+      hydrateForConnection(activeConnection.id);
       checkAndReconnect(activeConnection);
     } else {
       // Redirect to home if no active connection
       setIsReconnecting(false);
       router.push('/');
     }
-  }, [hasHydrated, activeConnection, router, setActiveConnection, syncReadOnlyMode]);
+  }, [hasHydrated, activeConnection, router, setActiveConnection, syncReadOnlyMode, hydrateForConnection]);
 
   const handleDisconnect = async () => {
     if (!activeConnection) return;
@@ -262,6 +312,15 @@ export default function StudioPage() {
 
   return (
     <div className="h-screen flex flex-col">
+      {/* Production stripe — always visible, not dismissible, so the tab is
+          identifiable at a glance even when scrolled into a data grid. */}
+      {isProduction(activeConnection.environment) && (
+        <div className="flex items-center justify-center gap-2 bg-red-600 px-4 py-1 text-[11px] font-semibold uppercase tracking-wider text-white shrink-0">
+          <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
+          Production — {activeConnection.name}
+        </div>
+      )}
+
       {/* Header */}
       <header className="h-14 border-b border-border/60 bg-background/70 backdrop-blur-md flex items-center justify-between px-4 shrink-0">
         <div className="flex items-center gap-3">
@@ -271,6 +330,21 @@ export default function StudioPage() {
           </div>
           <span className="text-muted-foreground">/</span>
           <DatabaseSwitcher activeConnection={activeConnection} />
+
+          {/* Environment label — makes "I thought that was staging" harder. */}
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${
+              environmentStyle(activeConnection.environment).badgeClass
+            }`}
+          >
+            <span
+              aria-hidden="true"
+              className={`h-1.5 w-1.5 rounded-full ${
+                environmentStyle(activeConnection.environment).dotClass
+              }`}
+            />
+            {environmentStyle(activeConnection.environment).label}
+          </span>
 
           {/* Health status indicator */}
           <TooltipProvider>
@@ -355,11 +429,16 @@ export default function StudioPage() {
                         (enforced)
                       </span>
                     )}
+                    {remainingLabel && (
+                      <span className="ml-1 font-mono text-xs text-amber-600 dark:text-amber-400">
+                        writes {remainingLabel}
+                      </span>
+                    )}
                   </Label>
                   <Switch
                     id="readonly-mode"
                     checked={readOnlyMode}
-                    onCheckedChange={toggleReadOnlyMode}
+                    onCheckedChange={handleReadOnlyToggle}
                     disabled={forceReadOnly}
                   />
                 </div>
@@ -449,6 +528,7 @@ export default function StudioPage() {
                     size="icon"
                     className="h-8 w-8"
                     onClick={() => setSidebarOpen(!sidebarOpen)}
+                    aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
                   >
                     {sidebarOpen ? (
                       <PanelLeftClose className="h-4 w-4" />
@@ -493,6 +573,18 @@ export default function StudioPage() {
           </div>
         </div>
       </div>
+
+      {writeDialogOpen && (
+      <WriteAccessDialog
+        connectionName={activeConnection.name}
+        requireReason={isProduction(activeConnection.environment)}
+        onCancel={() => setWriteDialogOpen(false)}
+        onConfirm={(options) => {
+          setWriteDialogOpen(false);
+          setReadOnlyMode(false, options);
+        }}
+      />
+      )}
     </div>
   );
 }

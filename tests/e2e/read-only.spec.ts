@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { POSTGRES_URL, resetDatabase, rowCount, queryScalar } from "./helpers/db";
 import {
   connectToPostgres,
+  disableWrites,
   enableWrites,
   openTable,
   readOnlySwitch,
@@ -101,14 +102,8 @@ test.describe("state survives a reload without the UI and server disagreeing", (
     await connectToPostgres(page);
     await enableWrites(page);
 
-    // Turn read-only back on.
-    const settingsResponse = page.waitForResponse(
-      (response) =>
-        response.url().includes("/api/settings") &&
-        response.request().method() === "POST"
-    );
-    await readOnlySwitch(page).click();
-    await settingsResponse;
+    // Turn read-only back on (immediate — only enabling writes is gated).
+    await disableWrites(page);
 
     await page.reload();
     await expect(page.getByRole("tab", { name: "Data" })).toBeVisible({

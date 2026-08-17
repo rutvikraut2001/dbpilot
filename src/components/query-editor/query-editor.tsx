@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Play, Plus, X, Clock, Download, Loader2, AlertTriangle } from 'lucide-react';
@@ -21,7 +21,15 @@ import {
   ResizableHandle,
 } from '@/components/ui/resizable';
 import { useStudioStore } from '@/lib/stores/studio';
+import { QueryResult } from '@/lib/adapters/types';
 import { useActiveConnection, useReadOnlyMode } from '@/lib/stores/connection';
+import { apiFetch, errorMessage } from '@/lib/utils/api-client';
+import { assessRisk } from '@/lib/query-guard';
+import { dialectForConnection } from '@/lib/utils/dialect';
+import {
+  DangerousQueryDialog,
+  QueryRiskDetails,
+} from './dangerous-query-dialog';
 
 // Dynamically import Monaco editor to avoid SSR issues
 const MonacoEditor = dynamic(
@@ -138,39 +146,105 @@ export function QueryEditor() {
 
   const activeTab = queryTabs.find((tab) => tab.id === activeQueryTabId);
 
-  const executeQuery = useCallback(async () => {
+  // Pending confirmation for a statement that changes data.
+  const [pendingRisk, setPendingRisk] = useState<QueryRiskDetails | null>(null);
+  const [pendingQuery, setPendingQuery] = useState('');
+
+  const runQuery = useCallback(async () => {
     if (!activeConnection || !activeTab || !activeTab.query.trim()) return;
 
     updateQueryTab(activeTab.id, { isExecuting: true, result: null });
 
     try {
-      const response = await fetch('/api/query', {
+      // Note: `readOnly` is intentionally not sent. The server reads its own
+      // state; a client-supplied value is ignored.
+      const result = await apiFetch<QueryResult>('/api/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           connectionId: activeConnection.id,
           query: activeTab.query,
-          readOnly: readOnlyMode,
         }),
       });
 
-      const result = await response.json();
-
       updateQueryTab(activeTab.id, { result, isExecuting: false });
       addToHistory(activeTab.query, activeConnection.name);
-    } catch {
+    } catch (error) {
+      // Report what actually went wrong — a rate limit, a lost connection, or a
+      // rejected statement all used to collapse into "Failed to execute query".
       updateQueryTab(activeTab.id, {
         result: {
           rows: [],
           columns: [],
           rowCount: 0,
           executionTimeMs: 0,
-          error: 'Failed to execute query',
+          error: errorMessage(error),
         },
         isExecuting: false,
       });
+      addToHistory(activeTab.query, activeConnection.name);
     }
-  }, [activeConnection, activeTab, readOnlyMode, updateQueryTab, addToHistory]);
+  }, [activeConnection, activeTab, updateQueryTab, addToHistory]);
+
+  /**
+   * Gate execution behind a confirmation when the statement changes data.
+   *
+   * The risk assessment runs locally so a plain SELECT never pays a round trip.
+   * The row estimate needs the planner, so it is fetched in the background while
+   * the dialog is already on screen.
+   */
+  const executeQuery = useCallback(async () => {
+    if (!activeConnection || !activeTab || !activeTab.query.trim()) return;
+
+    const query = activeTab.query;
+
+    // In read-only mode the server refuses writes outright, so a confirmation
+    // dialog would be asking about something that cannot happen. Let it through
+    // and surface the server's actual refusal instead.
+    if (readOnlyMode) {
+      await runQuery();
+      return;
+    }
+
+    const risk = assessRisk(query, dialectForConnection(activeConnection.type));
+
+    if (risk.level === 'safe') {
+      await runQuery();
+      return;
+    }
+
+    setPendingQuery(query);
+    setPendingRisk({ ...risk, estimatedRows: null, isEstimating: risk.canEstimateRows });
+
+    if (!risk.canEstimateRows) return;
+
+    try {
+      const analysis = await apiFetch<{ estimatedRows: number | null }>(
+        '/api/query/analyze',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connectionId: activeConnection.id, query }),
+        }
+      );
+      setPendingRisk((current) =>
+        current
+          ? { ...current, estimatedRows: analysis.estimatedRows, isEstimating: false }
+          : current
+      );
+    } catch {
+      // A failed estimate must not block the decision — the dialog says it
+      // could not be determined and the user chooses anyway.
+      setPendingRisk((current) =>
+        current ? { ...current, estimatedRows: null, isEstimating: false } : current
+      );
+    }
+  }, [activeConnection, activeTab, readOnlyMode, runQuery]);
+
+  const confirmPendingQuery = useCallback(async () => {
+    setPendingRisk(null);
+    await runQuery();
+  }, [runQuery]);
 
   const handleEditorChange = (value: string | undefined) => {
     if (activeTab && value !== undefined) {
@@ -363,6 +437,20 @@ export function QueryEditor() {
           </>
         )}
       </ResizablePanelGroup>
+
+      {pendingRisk && (
+      <DangerousQueryDialog
+        risk={pendingRisk}
+        query={pendingQuery}
+        environmentLabel={
+          activeConnection?.environment === 'production'
+            ? `PRODUCTION — ${activeConnection.name}`
+            : undefined
+        }
+        onCancel={() => setPendingRisk(null)}
+        onConfirm={confirmPendingQuery}
+      />
+      )}
     </div>
   );
 }

@@ -46,6 +46,8 @@ import { useStudioStore } from '@/lib/stores/studio';
 import { useActiveConnection } from '@/lib/stores/connection';
 import { Relationship, ColumnInfo } from '@/lib/adapters/types';
 import { TABLE_DRAG_MIME } from '@/lib/constants';
+import { toast } from 'sonner';
+import { errorMessage } from '@/lib/utils/api-client';
 
 interface TableNodeData extends Record<string, unknown> {
   label: string;
@@ -356,11 +358,19 @@ function SchemaViewerInner() {
       );
       const data = await response.json();
 
+      if (!response.ok || data.error) {
+        throw new Error(data.error || `Request failed (${response.status})`);
+      }
+
       if (data.relationships) {
         setRelationships(data.relationships);
       }
-    } catch {
-      // relationship fetch failed silently
+    } catch (err) {
+      // Previously silent: a failed load rendered an empty diagram, which reads
+      // as "this database has no relationships" rather than "loading failed".
+      toast.error('Could not load relationships', {
+        description: errorMessage(err),
+      });
     } finally {
       setIsLoading(false);
     }
@@ -690,8 +700,10 @@ function SchemaViewerInner() {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-    } catch {
-      alert('Failed to export schema. Please try again.');
+    } catch (err) {
+      toast.error('Failed to export schema', {
+        description: errorMessage(err),
+      });
     } finally {
       setIsExporting(false);
     }

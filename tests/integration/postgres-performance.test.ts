@@ -223,3 +223,101 @@ describe.skipIf(!CONNECTION_STRING)("PostgreSQL paging and bulk delete", () => {
     });
   });
 });
+
+describe.skipIf(!CONNECTION_STRING)("PostgreSQL row estimation", () => {
+  let adapter: PostgresAdapter;
+
+  beforeAll(async () => {
+    adapter = new PostgresAdapter(CONNECTION_STRING!);
+    await adapter.connect();
+  });
+
+  afterAll(async () => {
+    if (!adapter) return;
+    await adapter.executeQuery("DROP TABLE IF EXISTS est_rows");
+    await adapter.disconnect();
+  });
+
+  beforeEach(async () => {
+    await adapter.executeQuery("DROP TABLE IF EXISTS est_rows");
+    await adapter.executeQuery(
+      "CREATE TABLE est_rows (id serial PRIMARY KEY, bucket int NOT NULL)"
+    );
+    await adapter.executeQuery(`
+      INSERT INTO est_rows (bucket)
+      SELECT i % 10 FROM generate_series(1, 1000) AS i
+    `);
+    // Estimates come from table statistics; without ANALYZE they are a guess.
+    await adapter.executeQuery("ANALYZE est_rows");
+  });
+
+  async function remaining(): Promise<number> {
+    const result = await adapter.executeQuery(
+      "SELECT count(*)::int AS n FROM est_rows"
+    );
+    return result.rows[0].n as number;
+  }
+
+  it("estimates an unscoped DELETE without deleting anything", async () => {
+    // The whole safety property: EXPLAIN plans, it does not execute. Using
+    // EXPLAIN ANALYZE here would empty the table.
+    const estimate = await adapter.estimateAffectedRows("DELETE FROM est_rows");
+
+    expect(estimate).toBe(1000);
+    expect(await remaining()).toBe(1000);
+  });
+
+  it("estimates a scoped DELETE without deleting anything", async () => {
+    const estimate = await adapter.estimateAffectedRows(
+      "DELETE FROM est_rows WHERE bucket = 3"
+    );
+
+    expect(estimate).toBeGreaterThan(50);
+    expect(estimate).toBeLessThan(200);
+    expect(await remaining()).toBe(1000);
+  });
+
+  it("estimates an UPDATE without updating anything", async () => {
+    const before = await adapter.executeQuery(
+      "SELECT sum(bucket)::int AS total FROM est_rows"
+    );
+
+    const estimate = await adapter.estimateAffectedRows(
+      "UPDATE est_rows SET bucket = 99"
+    );
+    expect(estimate).toBe(1000);
+
+    const after = await adapter.executeQuery(
+      "SELECT sum(bucket)::int AS total FROM est_rows"
+    );
+    expect(after.rows[0].total).toBe(before.rows[0].total);
+  });
+
+  it("reads the estimate off the child of a ModifyTable node", async () => {
+    // A ModifyTable node reports "Plan Rows": 0 for itself; the useful estimate
+    // is on the scan beneath it. Reading the root would always yield 0.
+    expect(
+      await adapter.estimateAffectedRows("DELETE FROM est_rows WHERE id < 500")
+    ).toBeGreaterThan(0);
+  });
+
+  it("estimates a SELECT", async () => {
+    expect(
+      await adapter.estimateAffectedRows("SELECT * FROM est_rows WHERE bucket = 1")
+    ).toBeGreaterThan(0);
+  });
+
+  it("returns null for a statement the planner rejects", async () => {
+    expect(
+      await adapter.estimateAffectedRows("DELETE FROM does_not_exist")
+    ).toBeNull();
+  });
+
+  it("leaves the connection usable after a failed estimate", async () => {
+    await adapter.estimateAffectedRows("this is not sql");
+
+    const after = await adapter.executeQuery("SELECT 1 AS ok");
+    expect(after.error).toBeUndefined();
+    expect(after.rows[0].ok).toBe(1);
+  });
+});

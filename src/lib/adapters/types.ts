@@ -38,12 +38,22 @@ export interface SSHTunnelConfig {
   remotePort?: number;
 }
 
+/**
+ * Which environment a connection points at. Purely a client-side label — the
+ * server does not treat production differently — but it drives the visual
+ * treatment and the extra confirmation on destructive statements, which is what
+ * actually prevents "I thought that was staging".
+ */
+export type ConnectionEnvironment = 'development' | 'staging' | 'production';
+
 export interface ConnectionConfig {
   type: DatabaseType;
   connectionString: string;
   name: string;
   id: string;
   sshTunnel?: SSHTunnelConfig;
+  /** Defaults to 'development' when absent (including for pre-existing saved connections). */
+  environment?: ConnectionEnvironment;
 }
 
 export interface TableInfo {
@@ -180,6 +190,12 @@ export interface DatabaseAdapter {
 
   // Query execution
   executeQuery(query: string, options?: ExecuteQueryOptions): Promise<QueryResult>;
+
+  /**
+   * Ask the planner how many rows a statement would affect, without running it.
+   * Returns null when the adapter or the statement cannot be estimated.
+   */
+  estimateAffectedRows?(statement: string): Promise<number | null>;
 
   // Analytics
   getTableStats(table: string): Promise<TableStats>;

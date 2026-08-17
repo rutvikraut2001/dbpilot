@@ -4,6 +4,7 @@ import {
   setReadOnlyMode,
   isReadOnlyMode,
   isForceReadOnly,
+  getWriteAccess,
 } from "@/lib/server-state";
 import { audit } from "@/lib/audit";
 import { ConnectionIdSchema, sanitizeError } from "@/lib/validation";
@@ -12,6 +13,10 @@ import { z } from "zod";
 const UpdateSettingsSchema = z.object({
   connectionId: ConnectionIdSchema,
   readOnly: z.boolean(),
+  // Optional time box on write access. Enforced server-side, so it holds even if
+  // the tab is closed or local state is edited.
+  durationMinutes: z.number().int().positive().max(480).optional(),
+  reason: z.string().max(500).optional(),
 });
 
 // Update settings (including read-only mode)
@@ -30,7 +35,7 @@ export async function POST(request: NextRequest) {
     }
 
     connectionId = parsed.data.connectionId;
-    const { readOnly } = parsed.data;
+    const { readOnly, durationMinutes, reason } = parsed.data;
 
     // Verify connection exists
     const adapter = getCachedAdapter(connectionId);
@@ -63,17 +68,24 @@ export async function POST(request: NextRequest) {
 
     // Update server-side read-only state. The returned value is what the server
     // will actually enforce.
-    const effectiveReadOnly = setReadOnlyMode(connectionId, readOnly);
+    setReadOnlyMode(connectionId, readOnly, { durationMinutes, reason });
+    const access = getWriteAccess(connectionId);
 
     audit("settings.change", {
       connectionId,
-      details: { readOnly: effectiveReadOnly },
+      details: {
+        readOnly: access.readOnly,
+        durationMinutes,
+        reason,
+        expiresAt: access.writeExpiresAt,
+      },
       success: true,
     });
 
     return NextResponse.json({
       success: true,
-      readOnly: effectiveReadOnly,
+      readOnly: access.readOnly,
+      writeExpiresAt: access.writeExpiresAt ?? null,
       forceReadOnly: isForceReadOnly(),
     });
   } catch (error) {
@@ -123,8 +135,11 @@ export async function GET(request: NextRequest) {
       supportsTransactions: true,
     };
 
+    const access = getWriteAccess(connectionId!);
+
     return NextResponse.json({
-      readOnly: isReadOnlyMode(connectionId!),
+      readOnly: access.readOnly,
+      writeExpiresAt: access.writeExpiresAt ?? null,
       forceReadOnly: isForceReadOnly(),
       capabilities,
     });

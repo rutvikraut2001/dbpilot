@@ -551,6 +551,55 @@ export class PostgresAdapter extends BaseAdapter {
     }
   }
 
+  /**
+   * Estimated rows a statement would affect, from the query planner.
+   *
+   * Uses plain `EXPLAIN`, never `EXPLAIN ANALYZE`. That distinction is the whole
+   * point: ANALYZE *executes* the statement to gather real timings, so using it
+   * to preview a DELETE would delete the rows. Plain EXPLAIN only plans.
+   *
+   * The BEGIN/ROLLBACK wrapper is defence in depth, not the mechanism — nothing
+   * should have been executed for it to roll back.
+   *
+   * The number is an estimate from table statistics and can be off by orders of
+   * magnitude on a table that has not been ANALYZEd; callers must present it as
+   * approximate.
+   */
+  async estimateAffectedRows(statement: string): Promise<number | null> {
+    const pool = this.getPool();
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        `EXPLAIN (FORMAT JSON) ${statement}`,
+      );
+      await client.query("ROLLBACK");
+
+      const plan = result.rows[0]?.["QUERY PLAN"];
+      const root = Array.isArray(plan) ? plan[0]?.Plan : undefined;
+      if (!root) return null;
+
+      // For INSERT/UPDATE/DELETE the root is a ModifyTable node, and its own
+      // "Plan Rows" is 0 — it emits rows only with RETURNING. The estimate of
+      // how many rows will be touched lives on the child scan node.
+      const node =
+        root["Node Type"] === "ModifyTable" && Array.isArray(root.Plans)
+          ? root.Plans[0]
+          : root;
+
+      const planRows = node?.["Plan Rows"];
+      return typeof planRows === "number" ? planRows : null;
+    } catch {
+      await client.query("ROLLBACK").catch(() => {
+        /* transaction may already be aborted */
+      });
+      return null;
+    } finally {
+      client.release();
+    }
+  }
+
   async executeQuery(
     query: string,
     options?: ExecuteQueryOptions,

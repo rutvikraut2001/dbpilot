@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronUp,
   Network,
+  ShieldAlert,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,7 +21,16 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { useConnectionStore } from '@/lib/stores/connection';
 import { supportedDatabases } from '@/lib/constants';
-import { DatabaseType, SSHTunnelConfig } from '@/lib/adapters/types';
+import {
+  DatabaseType,
+  SSHTunnelConfig,
+  ConnectionEnvironment,
+} from '@/lib/adapters/types';
+import {
+  ENVIRONMENTS,
+  environmentStyle,
+  isProduction,
+} from '@/lib/utils/environment';
 import { toast } from 'sonner';
 
 const DEFAULT_SSH_TUNNEL: SSHTunnelConfig = {
@@ -47,6 +57,8 @@ export function ConnectionForm({ onConnected }: ConnectionFormProps) {
   const setActiveConnection = useConnectionStore((s) => s.setActiveConnection);
 
   const [dbType, setDbType] = useState<DatabaseType>('postgresql');
+  const [environment, setEnvironment] =
+    useState<ConnectionEnvironment>('development');
   const [connectionString, setConnectionString] = useState('');
   const [connectionName, setConnectionName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -108,6 +120,7 @@ export function ConnectionForm({ onConnected }: ConnectionFormProps) {
         type: dbType,
         connectionString,
         name: connectionName,
+        environment,
         sshTunnel: sshTunnel.enabled ? sshTunnel : undefined,
       });
 
@@ -170,16 +183,48 @@ export function ConnectionForm({ onConnected }: ConnectionFormProps) {
         </div>
       </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="connection-string">Connection String</Label>
-        <Input
-          id="connection-string"
-          type="text"
-          placeholder={selectedDb?.placeholder}
-          value={connectionString}
-          onChange={(e) => setConnectionString(e.target.value)}
-        />
+      <div className="grid grid-cols-3 gap-3">
+        <div className="col-span-2 space-y-2">
+          <Label htmlFor="connection-string">Connection String</Label>
+          <Input
+            id="connection-string"
+            type="text"
+            placeholder={selectedDb?.placeholder}
+            value={connectionString}
+            onChange={(e) => setConnectionString(e.target.value)}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="environment">Environment</Label>
+          <Select
+            value={environment}
+            onValueChange={(v) => setEnvironment(v as ConnectionEnvironment)}
+          >
+            <SelectTrigger id="environment">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {ENVIRONMENTS.map((env) => (
+                <SelectItem key={env} value={env}>
+                  {environmentStyle(env).label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
+
+      {isProduction(environment) && (
+        <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2">
+          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
+          <p className="text-xs text-red-700 dark:text-red-400">
+            Marked as production. The connection opens read-only, is labelled
+            throughout the UI, and destructive statements require an extra
+            confirmation.
+          </p>
+        </div>
+      )}
 
       {/* Advanced / SSH Tunnel Section */}
       <div className="border rounded-lg overflow-hidden">

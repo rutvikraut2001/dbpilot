@@ -28,6 +28,16 @@ export function useConnectionHealth({
   const retryCount = useRef(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Status is mirrored into a ref so `checkHealth` can read it without listing
+  // it as a dependency. With `status` in the dependency array the callback was
+  // rebuilt on every transition, which tore down and recreated the 30s polling
+  // interval each time — and, combined with the auto-reconnect effect below,
+  // could re-fire a reconnect that was already in flight.
+  const statusRef = useRef(status);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
   const checkHealth = useCallback(async () => {
     if (!connectionId) {
       setStatus('disconnected');
@@ -39,7 +49,10 @@ export function useConnectionHealth({
       const data = await response.json();
 
       if (data.exists && data.healthy) {
-        if (status === 'unhealthy' || status === 'reconnecting') {
+        if (
+          statusRef.current === 'unhealthy' ||
+          statusRef.current === 'reconnecting'
+        ) {
           retryCount.current = 0;
         }
         setStatus('healthy');
@@ -49,7 +62,7 @@ export function useConnectionHealth({
     } catch {
       setStatus('unhealthy');
     }
-  }, [connectionId, status]);
+  }, [connectionId]);
 
   const reconnect = useCallback(async () => {
     if (!connectionId || !connectionType || !connectionString) return;

@@ -9,9 +9,14 @@ import {
   QueryResult,
   TableStats,
   IndexInfo,
+  ExecuteQueryOptions,
+  QueryDialect,
 } from './types';
+import { isWriteMongoQuery } from '../query-guard';
 
 export class MongoDBAdapter extends BaseAdapter {
+  readonly dialect: QueryDialect = 'mongodb';
+
   private client: MongoClient | null = null;
   private db: Db | null = null;
 
@@ -212,20 +217,32 @@ export class MongoDBAdapter extends BaseAdapter {
   async getRows(table: string, options: QueryOptions): Promise<PaginatedResult> {
     const db = this.getDb();
     const collection = db.collection(table);
-    const { page, pageSize, sortBy, sortOrder, filters } = options;
+    const {
+      page,
+      pageSize,
+      sortBy,
+      sortOrder,
+      filters,
+      includeTotal = true,
+      orderBy,
+    } = options;
 
     const skip = (page - 1) * pageSize;
     const query = filters || {};
 
-    // Build sort object
+    // Build sort object. An explicit orderBy wins — skip/limit over an unsorted
+    // cursor has no stable order, so a full walk would repeat and skip docs.
     const sort: Record<string, 1 | -1> = {};
-    if (sortBy) {
+    if (orderBy && orderBy.length > 0) {
+      for (const col of orderBy) sort[col] = 1;
+    } else if (sortBy) {
       sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
     }
 
+    // countDocuments scans; skip it when the caller already has a cached total.
     const [data, total] = await Promise.all([
       collection.find(query).sort(sort).skip(skip).limit(pageSize).toArray(),
-      collection.countDocuments(query),
+      includeTotal ? collection.countDocuments(query) : Promise.resolve(0),
     ]);
 
     // Convert ObjectId to string for JSON serialization
@@ -324,11 +341,24 @@ export class MongoDBAdapter extends BaseAdapter {
     return result.deletedCount > 0;
   }
 
-  async executeQuery(query: string): Promise<QueryResult> {
+  async executeQuery(
+    query: string,
+    options?: ExecuteQueryOptions,
+  ): Promise<QueryResult> {
     const db = this.getDb();
     const startTime = Date.now();
 
     try {
+      // MongoDB has no session-level read-only equivalent to PostgreSQL's
+      // `SET TRANSACTION READ ONLY`, so operation inspection is the enforcement
+      // point here. Re-checked inside the adapter as well as in the API route so
+      // the guarantee doesn't depend on every caller remembering to check.
+      if (options?.readOnly && isWriteMongoQuery(query)) {
+        throw new Error(
+          'Write operations are not allowed in read-only mode',
+        );
+      }
+
       // Parse the query - expected format: db.collection.method(args)
       // or just a JSON query for find operations
       const parsed = this.parseMongoQuery(query);

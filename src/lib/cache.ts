@@ -108,7 +108,21 @@ export const CACHE_TTL = {
   SCHEMA: 5 * 60 * 1000, // 5 minutes for table schema
   RELATIONSHIPS: 5 * 60 * 1000, // 5 minutes for relationships
   STATS: 30 * 1000, // 30 seconds for stats
+  // Row counts back the pagination footer. Short-lived because a stale total
+  // only mis-renders the page count, and writes invalidate it explicitly.
+  ROW_COUNT: 30 * 1000,
 } as const;
+
+/**
+ * Stable key for a filter object — same filters must produce the same string
+ * regardless of property order, or the count cache would miss on every request.
+ */
+export function filtersCacheKey(filters?: Record<string, unknown>): string {
+  if (!filters) return "";
+  const keys = Object.keys(filters).sort();
+  if (keys.length === 0) return "";
+  return JSON.stringify(keys.map((key) => [key, filters[key]]));
+}
 
 // Cache key generators
 export const cacheKey = {
@@ -119,4 +133,9 @@ export const cacheKey = {
   stats: (connectionId: string, table: string) =>
     `${connectionId}:stats:${table}`,
   dbStats: (connectionId: string) => `${connectionId}:dbStats`,
+  rowCount: (connectionId: string, table: string, filters: string) =>
+    `${connectionId}:rowCount:${table}:${filters}`,
+  /** Prefix covering every cached count for a table, for invalidation. */
+  rowCountPrefix: (connectionId: string, table: string) =>
+    `${connectionId}:rowCount:${table}:`,
 };

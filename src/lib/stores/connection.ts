@@ -9,8 +9,18 @@ interface ConnectionState {
   // Currently active connection
   activeConnectionId: string | null;
 
-  // Read-only mode for production safety
+  // Read-only mode for production safety.
+  // The server is authoritative; this mirrors it so the UI can never display a
+  // weaker state than is actually being enforced.
   readOnlyMode: boolean;
+
+  // True when the deployment sets FORCE_READ_ONLY — write access cannot be
+  // enabled at all. Never persisted; always read from the server.
+  forceReadOnly: boolean;
+
+  // When temporary write access lapses (ms since epoch), or null for an
+  // open-ended grant. Mirrors the server, which does the actual enforcing.
+  writeExpiresAt: number | null;
 
   // Hydration state (for SSR/refresh handling)
   _hasHydrated: boolean;
@@ -21,7 +31,11 @@ interface ConnectionState {
   removeConnection: (id: string) => void;
   setActiveConnection: (id: string | null) => void;
   toggleReadOnlyMode: () => Promise<void>;
-  setReadOnlyMode: (value: boolean) => Promise<void>;
+  setReadOnlyMode: (
+    value: boolean,
+    options?: { durationMinutes?: number; reason?: string }
+  ) => Promise<void>;
+  syncReadOnlyMode: (connectionId: string) => Promise<void>;
   getConnection: (id: string) => ConnectionConfig | undefined;
   getActiveConnection: () => ConnectionConfig | undefined;
   setHasHydrated: (state: boolean) => void;
@@ -35,7 +49,11 @@ export const useConnectionStore = create<ConnectionState>()(
     (set, get) => ({
       connections: [],
       activeConnectionId: null,
-      readOnlyMode: false,
+      // Safe default, and the same default the server applies to a connection
+      // it has no recorded state for.
+      readOnlyMode: true,
+      forceReadOnly: false,
+      writeExpiresAt: null,
       _hasHydrated: false,
 
       setHasHydrated: (state: boolean) => {
@@ -73,50 +91,76 @@ export const useConnectionStore = create<ConnectionState>()(
       },
 
       toggleReadOnlyMode: async () => {
-        const { activeConnectionId, readOnlyMode } = get();
-        const newValue = !readOnlyMode;
+        const { readOnlyMode, setReadOnlyMode } = get();
+        await setReadOnlyMode(!readOnlyMode);
+      },
 
-        // Update local state immediately for responsiveness
-        set({ readOnlyMode: newValue });
+      /**
+       * Request a read-only setting from the server and adopt whatever it
+       * returns. The server's answer wins in both directions: if it refuses to
+       * enable writes (FORCE_READ_ONLY) or the request fails, the UI stays on
+       * the safe value rather than showing a permission the server won't honor.
+       */
+      setReadOnlyMode: async (value, options) => {
+        const { activeConnectionId } = get();
 
-        // Sync with server-side state
-        if (activeConnectionId) {
-          try {
-            await fetch('/api/settings', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                connectionId: activeConnectionId,
-                readOnly: newValue,
-              }),
+        if (!activeConnectionId) {
+          set({ readOnlyMode: value, writeExpiresAt: null });
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              connectionId: activeConnectionId,
+              readOnly: value,
+              durationMinutes: options?.durationMinutes,
+              reason: options?.reason,
+            }),
+          });
+
+          const data = await response.json().catch(() => ({}));
+
+          if (typeof data.readOnly === 'boolean') {
+            set({
+              readOnlyMode: data.readOnly,
+              forceReadOnly: data.forceReadOnly === true,
+              writeExpiresAt: data.writeExpiresAt ?? null,
             });
-          } catch (error) {
-            console.error('Failed to sync read-only mode with server:', error);
-            // Revert on failure
-            set({ readOnlyMode: !newValue });
+            return;
           }
+
+          // Server gave us nothing usable — fail closed.
+          set({ readOnlyMode: true, writeExpiresAt: null });
+        } catch (error) {
+          console.error('Failed to sync read-only mode with server:', error);
+          set({ readOnlyMode: true, writeExpiresAt: null });
         }
       },
 
-      setReadOnlyMode: async (value) => {
-        const { activeConnectionId } = get();
+      /**
+       * Adopt the server's current read-only state for a connection.
+       * Called after connect/reconnect so a locally-persisted preference can
+       * never disagree with what the server is enforcing.
+       */
+      syncReadOnlyMode: async (connectionId) => {
+        try {
+          const response = await fetch(
+            `/api/settings?connectionId=${encodeURIComponent(connectionId)}`
+          );
+          const data = await response.json().catch(() => ({}));
 
-        set({ readOnlyMode: value });
-
-        // Sync with server-side state
-        if (activeConnectionId) {
-          try {
-            await fetch('/api/settings', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                connectionId: activeConnectionId,
-                readOnly: value,
-              }),
+          if (typeof data.readOnly === 'boolean') {
+            set({
+              readOnlyMode: data.readOnly,
+              forceReadOnly: data.forceReadOnly === true,
+              writeExpiresAt: data.writeExpiresAt ?? null,
             });
-          } catch (error) {
-            console.error('Failed to sync read-only mode with server:', error);
           }
+        } catch (error) {
+          console.error('Failed to read read-only mode from server:', error);
         }
       },
 
@@ -131,12 +175,33 @@ export const useConnectionStore = create<ConnectionState>()(
     }),
     {
       name: 'db-studio-connections',
-      // Persist active connection ID so user stays connected after refresh
+      // Persist active connection ID so user stays connected after refresh.
+      //
+      // `readOnlyMode` is deliberately NOT persisted. Restoring it from
+      // localStorage means the UI would render a write-enabled state before the
+      // server has confirmed one — which is how the toggle came to disagree with
+      // actual server enforcement. It now starts read-only and is corrected by
+      // syncReadOnlyMode() once the server answers.
       partialize: (state) => ({
         connections: state.connections,
-        readOnlyMode: state.readOnlyMode,
         activeConnectionId: state.activeConnectionId,
       }),
+      version: 2,
+      // `partialize` governs what gets written, not what gets read — a blob saved
+      // by an earlier version still carries `readOnlyMode`, and the default merge
+      // would restore it. Pin the permission fields to their in-memory defaults
+      // so a stale `false` can never re-enable writes in the UI before the
+      // server has been asked.
+      merge: (persisted, current) => {
+        const saved = (persisted ?? {}) as Partial<ConnectionState>;
+        return {
+          ...current,
+          ...saved,
+          readOnlyMode: current.readOnlyMode,
+          forceReadOnly: current.forceReadOnly,
+          writeExpiresAt: current.writeExpiresAt,
+        };
+      },
       onRehydrateStorage: () => (state) => {
         state?.setHasHydrated(true);
       },
@@ -144,12 +209,25 @@ export const useConnectionStore = create<ConnectionState>()(
   )
 );
 
-// Selectors for convenience
+// Selectors for convenience.
+//
+// Each one subscribes to a single slice. Calling `useConnectionStore()` with no
+// selector subscribes to the whole store, so any write — toggling read-only,
+// adding a connection, the hydration flag flipping — re-renders every consumer.
+// `useActiveConnection` is used by nearly every component, so that mattered.
 export const useActiveConnection = () => {
-  const { connections, activeConnectionId } = useConnectionStore();
+  const connections = useConnectionStore((state) => state.connections);
+  const activeConnectionId = useConnectionStore(
+    (state) => state.activeConnectionId
+  );
+  // Returns an element of `connections`, so the reference is stable as long as
+  // the array is — no memo needed for consumers using it in dependency arrays.
   return connections.find((conn) => conn.id === activeConnectionId);
 };
 
 export const useConnections = () => useConnectionStore((state) => state.connections);
 export const useReadOnlyMode = () => useConnectionStore((state) => state.readOnlyMode);
+export const useForceReadOnly = () => useConnectionStore((state) => state.forceReadOnly);
+export const useWriteExpiresAt = () =>
+  useConnectionStore((state) => state.writeExpiresAt);
 export const useHasHydrated = () => useConnectionStore((state) => state._hasHydrated);

@@ -232,13 +232,16 @@ interface FieldEditorProps {
   currentValue: unknown;
   displayValue: string;
   isNull: boolean;
+  // Ties the rendered control to its <label htmlFor>, so the field name is
+  // announced by screen readers and addressable by name in tests.
+  inputId: string;
   onChange: (value: unknown) => void;
 }
 
-function FieldEditor({ col, currentValue, displayValue, isNull, onChange }: Readonly<FieldEditorProps>) {
+function FieldEditor({ col, currentValue, displayValue, isNull, inputId, onChange }: Readonly<FieldEditorProps>) {
   if (isNull) {
     return (
-      <div className="h-9 bg-muted/30 rounded-md flex items-center px-3">
+      <div id={inputId} className="h-9 bg-muted/30 rounded-md flex items-center px-3">
         <span className="text-xs text-muted-foreground italic">NULL</span>
       </div>
     );
@@ -248,7 +251,7 @@ function FieldEditor({ col, currentValue, displayValue, isNull, onChange }: Read
   if (enumValues.length > 0) {
     return (
       <Select value={selectValueFor(currentValue)} onValueChange={onChange}>
-        <SelectTrigger className="h-9 text-sm w-full min-w-0">
+        <SelectTrigger id={inputId} className="h-9 text-sm w-full min-w-0">
           <SelectValue placeholder="Select value..." />
         </SelectTrigger>
         <SelectContent className="max-h-[40vh]">
@@ -265,7 +268,7 @@ function FieldEditor({ col, currentValue, displayValue, isNull, onChange }: Read
     const checked = currentValue === true || currentValue === 'true';
     return (
       <div className="flex items-center gap-2 h-9">
-        <Switch checked={checked} onCheckedChange={onChange} />
+        <Switch id={inputId} checked={checked} onCheckedChange={onChange} />
         <span className="text-sm text-muted-foreground">{checked ? 'true' : 'false'}</span>
       </div>
     );
@@ -277,6 +280,7 @@ function FieldEditor({ col, currentValue, displayValue, isNull, onChange }: Read
       <Textarea
         value={displayValue}
         onChange={(e) => onChange(e.target.value)}
+        id={inputId}
         className="font-mono text-xs min-h-25 max-h-[40vh] resize-y break-all w-full min-w-0 overflow-auto"
       />
     );
@@ -288,6 +292,7 @@ function FieldEditor({ col, currentValue, displayValue, isNull, onChange }: Read
       <Textarea
         value={displayValue}
         onChange={(e) => onChange(e.target.value)}
+        id={inputId}
         className="text-sm min-h-20 max-h-[40vh] resize-y break-all w-full min-w-0 overflow-auto"
       />
     );
@@ -295,6 +300,7 @@ function FieldEditor({ col, currentValue, displayValue, isNull, onChange }: Read
 
   return (
     <Input
+      id={inputId}
       value={displayValue}
       onChange={(e) => onChange(e.target.value)}
       className="text-sm h-9 w-full min-w-0"
@@ -624,6 +630,7 @@ export function EditRowDialog({
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <label
+                          htmlFor={`edit-field-${col.name}`}
                           className="text-sm font-medium wrap-break-word leading-tight"
                           title={col.name}
                         >
@@ -658,6 +665,7 @@ export function EditRowDialog({
                     currentValue={currentValue}
                     displayValue={displayValue}
                     isNull={isNull}
+                    inputId={`edit-field-${col.name}`}
                     onChange={(v) => updateField(col.name, v)}
                   />
                 </div>

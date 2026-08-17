@@ -15,7 +15,8 @@ import {
 } from "@/lib/utils/connection-string";
 import { buildConnectionStrategies, diagnoseConnectionError } from "@/lib/utils/connection-diagnostics";
 import {
-  setReadOnlyMode,
+  initReadOnlyMode,
+  isForceReadOnly,
   clearReadOnlyState,
 } from "@/lib/server-state";
 import { audit } from "@/lib/audit";
@@ -127,11 +128,15 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { type, connectionString, readOnly, sshTunnel } = body as {
+    // NOTE: a `readOnly` field in the body is deliberately ignored. Connecting
+    // must not be able to set write permission — that would let a reconnect
+    // (which carries no such field) silently reset the connection to writable
+    // while the UI still displays read-only. Changing the mode is an explicit,
+    // audited call to POST /api/settings.
+    const { type, connectionString, sshTunnel } = body as {
       type: DatabaseType;
       connectionString: string;
       connectionId?: string;
-      readOnly?: boolean;
       sshTunnel?: SSHTunnelConfig;
     };
     connectionId = body.connectionId;
@@ -187,18 +192,22 @@ export async function POST(request: NextRequest) {
       );
       await cachedAdapter.connect();
 
-      // Initialize server-side read-only state
-      setReadOnlyMode(connectionId, readOnly ?? false);
+      // New connections start read-only; reconnects keep their existing state.
+      const readOnly = initReadOnlyMode(connectionId);
 
       audit("connection.create", {
         connectionId,
-        details: { type },
+        details: { type, readOnly },
         success: true,
       });
 
-      // Return the effective connection string so client can store it
+      // Return the effective connection string so client can store it, plus the
+      // authoritative read-only state so the UI reflects the server, not a
+      // locally-remembered preference.
       return NextResponse.json({
         ...result,
+        readOnly,
+        forceReadOnly: isForceReadOnly(),
         effectiveConnectionString:
           effectiveConnectionString !== connectionString
             ? effectiveConnectionString

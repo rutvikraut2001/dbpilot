@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   useReactTable,
   getCoreRowModel,
@@ -14,6 +15,8 @@ import {
   X,
   XCircle,
   Pencil,
+  AlertCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -29,9 +32,10 @@ import {
 } from '@/components/ui/tooltip';
 import { useStudioStore } from '@/lib/stores/studio';
 import { useActiveConnection, useReadOnlyMode } from '@/lib/stores/connection';
-import { PaginatedResult } from '@/lib/adapters/types';
+import { PaginatedResult, ColumnInfo } from '@/lib/adapters/types';
 import { cn } from '@/lib/utils';
 import { rowsToCsv, rowsToJson, exportFilename } from '@/lib/utils/export';
+import { apiFetch, errorMessage } from '@/lib/utils/api-client';
 import { toast } from 'sonner';
 import { SmartCellDisplay, RedisCellDisplay } from './cell-renderer';
 import { EditRowDialog, EditSingleFieldDialog } from './edit-row-drawer';
@@ -63,6 +67,19 @@ function getRowBgClass(isSelected: boolean, rowIndex: number): string {
 
 function pluralize(count: number, singular: string): string {
   return count > 1 ? `${singular}s` : singular;
+}
+
+/**
+ * Sort state for a column header, exposed to assistive tech. The visible arrow
+ * is aria-hidden, so this is the only place the sort direction is announced.
+ */
+function getAriaSort(
+  columnId: string,
+  sortBy: string | undefined,
+  sortOrder: 'asc' | 'desc'
+): 'ascending' | 'descending' | undefined {
+  if (columnId === 'select' || sortBy !== columnId) return undefined;
+  return sortOrder === 'asc' ? 'ascending' : 'descending';
 }
 
 function displayRowKey(key: unknown): string {
@@ -150,6 +167,9 @@ interface DataRowProps {
   onEditRow: (row: RowData) => void;
   onDeleteRow: (row: RowData) => void;
   onFKClick: (ref: { table: string; column: string }, value: unknown) => void;
+  // Lets the virtualizer measure this row's real height; cell content varies,
+  // so heights are measured rather than assumed.
+  measureRef?: (node: HTMLTableRowElement | null) => void;
 }
 
 function DataRow({
@@ -163,6 +183,7 @@ function DataRow({
   onEditRow,
   onDeleteRow,
   onFKClick,
+  measureRef,
 }: Readonly<DataRowProps>) {
   const isSelected = row.getIsSelected();
   const handleEdit = (e: React.MouseEvent) => {
@@ -174,7 +195,11 @@ function DataRow({
     onDeleteRow(row.original);
   };
   return (
-    <tr className={cn('border-b border-border/30 transition-colors group', getRowBgClass(isSelected, rowIndex))}>
+    <tr
+      ref={measureRef}
+      data-index={rowIndex}
+      className={cn('border-b border-border/30 transition-colors group', getRowBgClass(isSelected, rowIndex))}
+    >
       {row.getVisibleCells().map((cell) => (
         <DataCell
           key={cell.id}
@@ -289,7 +314,10 @@ function SortableHeader({
     >
       <span className="truncate">{columnKey}</span>
       {sortBy === columnKey && (
-        <span className="text-primary shrink-0">
+        // Decorative: the sort state is exposed to assistive tech via aria-sort
+        // on the enclosing <th>. Leaving the glyph in the accessible name would
+        // rename the button from "id" to "id ↑" as soon as it is sorted.
+        <span aria-hidden="true" className="text-primary shrink-0">
           {sortOrder === 'asc' ? '↑' : '↓'}
         </span>
       )}
@@ -325,7 +353,10 @@ function DataTable({
 }>) {
   const activeConnection = useActiveConnection();
   const readOnlyMode = useReadOnlyMode();
-  const { tableSchema, addDataTab, setTableSchema, setIsLoadingSchema } = useStudioStore();
+  const tableSchema = useStudioStore((s) => s.tableSchema);
+  const addDataTab = useStudioStore((s) => s.addDataTab);
+  const setTableSchema = useStudioStore((s) => s.setTableSchema);
+  const setIsLoadingSchema = useStudioStore((s) => s.setIsLoadingSchema);
 
   const isRedis = activeConnection?.type === 'redis';
 
@@ -334,6 +365,7 @@ function DataTable({
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<string | undefined>();
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
@@ -386,18 +418,19 @@ function DataTable({
         );
       }
 
-      const response = await fetch(`/api/data?${params}`);
-      const result: PaginatedResult = await response.json();
-
-      if (!result.data) {
-        return;
-      }
+      const result = await apiFetch<PaginatedResult>(`/api/data?${params}`);
 
       setData(result.data);
       setTotalRows(result.total);
       setRowSelection({});
-    } catch {
-      // fetch error — silently fail, toolbar shows stale state
+      setLoadError(null);
+    } catch (error) {
+      // Previously swallowed: a failed load left the previous rows on screen, or
+      // an empty grid reading "No data found", with no indication anything had
+      // gone wrong. Surface it and let the user retry.
+      setLoadError(errorMessage(error));
+      setData([]);
+      setTotalRows(0);
     } finally {
       setIsLoading(false);
     }
@@ -427,12 +460,20 @@ function DataTable({
     let cancelled = false;
     setTableSchema([]);
     setIsLoadingSchema(true);
-    fetch(`/api/schema?connectionId=${connectionId}&table=${encodeURIComponent(tableName)}`)
-      .then((r) => r.json())
+    apiFetch<{ schema: ColumnInfo[] }>(
+      `/api/schema?connectionId=${connectionId}&table=${encodeURIComponent(tableName)}`
+    )
       .then((data) => {
-        if (!cancelled && !data.error) setTableSchema(data.schema);
+        if (!cancelled) setTableSchema(data.schema);
       })
-      .catch(() => { /* silent — toolbar shows stale state */ })
+      .catch((error) => {
+        // Without the schema there are no primary keys, so editing and deleting
+        // silently stop working. Say so rather than leaving a dead UI.
+        if (cancelled) return;
+        toast.error('Could not load table structure', {
+          description: errorMessage(error),
+        });
+      })
       .finally(() => { if (!cancelled) setIsLoadingSchema(false); });
     return () => { cancelled = true; };
   }, [tableName, activeConnection?.id, setTableSchema, setIsLoadingSchema]);
@@ -481,6 +522,15 @@ function DataTable({
       return pk;
     },
     [tableSchema, isRedis]
+  );
+
+  // Identity of the row being edited, used to force the edit dialogs to remount
+  // when the target row changes. Derived from the primary key and recomputed
+  // only when the row does — the previous key stringified the entire row object
+  // on every render of the table.
+  const editingRowKey = useMemo(
+    () => (editingRowData ? JSON.stringify(getPrimaryKey(editingRowData)) : ''),
+    [editingRowData, getPrimaryKey]
   );
 
   const handleFKClick = useCallback(
@@ -545,39 +595,44 @@ function DataTable({
     if (!activeConnection || selectedRowCount === 0) return;
 
     setIsBulkDeleting(true);
-    let successCount = 0;
-    let failCount = 0;
 
     const selectedRows = table.getSelectedRowModel().rows.map((r) => r.original);
+    const primaryKeys = selectedRows.map(getPrimaryKey);
 
-    for (const row of selectedRows) {
-      try {
-        const primaryKey = getPrimaryKey(row);
-        const response = await fetch(
-          `/api/data?connectionId=${activeConnection.id}&table=${tableName}&primaryKey=${encodeURIComponent(JSON.stringify(primaryKey))}&readOnly=${readOnlyMode}`,
-          { method: 'DELETE' }
+    // One request for the whole selection. This used to be a serial loop of one
+    // DELETE per row, so deleting 100 rows meant 100 sequential round trips.
+    try {
+      const response = await fetch('/api/data/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          connectionId: activeConnection.id,
+          table: tableName,
+          primaryKeys,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        toast.error('Failed to delete', { description: result.error });
+      } else if (result.failed === 0) {
+        toast.success(
+          `${result.deleted} ${pluralize(result.deleted, isRedis ? 'key' : 'row')} deleted`
         );
-        const result = await response.json();
-        if (result.success) {
-          successCount++;
-        } else {
-          failCount++;
-        }
-      } catch {
-        failCount++;
+      } else {
+        toast.error(`Deleted ${result.deleted}, failed ${result.failed}`, {
+          description: result.error,
+        });
       }
+    } catch {
+      toast.error('Failed to delete');
+    } finally {
+      setIsBulkDeleting(false);
+      setBulkDeleteDialogOpen(false);
+      setRowSelection({});
+      fetchData();
     }
-
-    setIsBulkDeleting(false);
-    setBulkDeleteDialogOpen(false);
-    setRowSelection({});
-
-    if (failCount === 0) {
-      toast.success(`${successCount} ${pluralize(successCount, isRedis ? 'key' : 'row')} deleted`);
-    } else {
-      toast.error(`Deleted ${successCount}, failed ${failCount}`);
-    }
-    fetchData();
   };
 
   const handleFlushAll = async () => {
@@ -655,8 +710,14 @@ function DataTable({
     }
   }, [sortBy]);
 
+  // Derived from the column *names*, not the row data: previously any refetch
+  // produced new ColumnDef objects and invalidated the table's column model
+  // even when the shape had not changed.
+  const columnKeys = data.length > 0 ? Object.keys(data[0]).join('\u0000') : '';
+
   const columns: ColumnDef<RowData, unknown>[] = useMemo(() => {
-    if (data.length === 0) return [];
+    if (columnKeys === '') return [];
+    const keys = columnKeys.split('\u0000');
 
     const cols: ColumnDef<RowData, unknown>[] = [];
 
@@ -672,7 +733,7 @@ function DataTable({
       });
     }
 
-    const dataCols: ColumnDef<RowData, unknown>[] = Object.keys(data[0]).map((key) => ({
+    const dataCols: ColumnDef<RowData, unknown>[] = keys.map((key) => ({
       accessorKey: key,
       header: ColumnHeader,
       size: getColumnSize(isRedis, key),
@@ -682,7 +743,13 @@ function DataTable({
 
     cols.push(...dataCols);
     return cols;
-  }, [data, isRedis, canDelete]);
+  }, [columnKeys, isRedis, canDelete]);
+
+  // Virtualized rows. The API now serves up to 500 rows per page, and cells can
+  // be expensive (FK buttons, JSON badges, copy controls), so only the visible
+  // window is mounted. Heights are measured rather than assumed because cell
+  // content varies in height.
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const table = useReactTable({
     data,
@@ -703,6 +770,14 @@ function DataTable({
     } satisfies TableMeta,
   });
 
+  const tableRows = table.getRowModel().rows;
+  const rowVirtualizer = useVirtualizer({
+    count: tableRows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 41,
+    overscan: 10,
+  });
+
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -721,7 +796,7 @@ function DataTable({
       />
 
       {/* Table */}
-      <div className="flex-1 overflow-auto min-h-0">
+      <div ref={scrollRef} className="flex-1 overflow-auto min-h-0">
         <table
           className="w-full border-collapse"
           style={{ minWidth: table.getTotalSize() || '100%' }}
@@ -735,6 +810,7 @@ function DataTable({
                 {headerGroup.headers.map((header) => (
                   <th
                     key={header.id}
+                    aria-sort={getAriaSort(header.column.id, sortBy, sortOrder)}
                     className={cn(
                       'relative text-left px-4 py-3 border-b border-r border-border/50 bg-muted/80 first:border-l-0',
                       header.column.id === 'select' && 'sticky left-0 z-2 px-3'
@@ -798,30 +874,84 @@ function DataTable({
                   </tr>
                 );
               }
-              if (table.getRowModel().rows.length === 0) {
+              // An empty table and a failed request are different things and
+              // used to render identically as "No data found".
+              if (loadError) {
                 return (
                   <tr>
-                    <td colSpan={colSpan} className="h-32 text-center text-muted-foreground">
-                      No data found
+                    <td colSpan={colSpan} className="h-32 px-4 text-center">
+                      <div className="flex flex-col items-center gap-2">
+                        <div className="flex items-center gap-2 text-destructive">
+                          <AlertCircle className="h-4 w-4 shrink-0" />
+                          <span className="text-sm font-medium">
+                            Could not load rows
+                          </span>
+                        </div>
+                        <p className="max-w-md text-xs text-muted-foreground break-words">
+                          {loadError}
+                        </p>
+                        <Button variant="outline" size="sm" onClick={fetchData}>
+                          <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                          Retry
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 );
               }
-              return table.getRowModel().rows.map((row, rowIndex) => (
-                <DataRow
-                  key={row.id}
-                  row={row}
-                  rowIndex={rowIndex}
-                  isRedis={isRedis}
-                  canEdit={canEdit}
-                  canDelete={canDelete}
-                  fkLookup={fkLookup}
-                  onEditField={handleEditField}
-                  onEditRow={handleEditRow}
-                  onDeleteRow={handleDeleteRowRequest}
-                  onFKClick={handleFKClick}
-                />
-              ));
+
+              if (tableRows.length === 0) {
+                return (
+                  <tr>
+                    <td colSpan={colSpan} className="h-32 text-center text-muted-foreground">
+                      {filter
+                        ? `No rows where ${filter.column} = ${displayRowKey(filter.value)}`
+                        : 'This table is empty'}
+                    </td>
+                  </tr>
+                );
+              }
+
+              const virtualRows = rowVirtualizer.getVirtualItems();
+              const paddingTop = virtualRows.length > 0 ? virtualRows[0].start : 0;
+              const paddingBottom =
+                virtualRows.length > 0
+                  ? rowVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
+                  : 0;
+
+              return (
+                <>
+                  {paddingTop > 0 && (
+                    <tr aria-hidden="true" style={{ height: paddingTop }}>
+                      <td colSpan={colSpan} />
+                    </tr>
+                  )}
+                  {virtualRows.map((virtualRow) => {
+                    const row = tableRows[virtualRow.index];
+                    return (
+                      <DataRow
+                        key={row.id}
+                        row={row}
+                        rowIndex={virtualRow.index}
+                        isRedis={isRedis}
+                        canEdit={canEdit}
+                        canDelete={canDelete}
+                        fkLookup={fkLookup}
+                        onEditField={handleEditField}
+                        onEditRow={handleEditRow}
+                        onDeleteRow={handleDeleteRowRequest}
+                        onFKClick={handleFKClick}
+                        measureRef={rowVirtualizer.measureElement}
+                      />
+                    );
+                  })}
+                  {paddingBottom > 0 && (
+                    <tr aria-hidden="true" style={{ height: paddingBottom }}>
+                      <td colSpan={colSpan} />
+                    </tr>
+                  )}
+                </>
+              );
             })()}
           </tbody>
         </table>
@@ -842,7 +972,7 @@ function DataTable({
       {/* Single field edit (double-click) */}
       {editingRowData && activeConnection && editingField && (
         <EditSingleFieldDialog
-          key={`single-${tableName}-${editingField}-${JSON.stringify(editingRowData)}`}
+          key={`single-${tableName}-${editingField}-${editingRowKey}`}
           open={!!editingField}
           onOpenChange={(open) => {
             if (!open) {
@@ -864,7 +994,7 @@ function DataTable({
       {/* Full row edit (pencil button) */}
       {editingRowData && activeConnection && !editingField && editDrawerOpen && (
         <EditRowDialog
-          key={`row-${tableName}-${JSON.stringify(editingRowData)}`}
+          key={`row-${tableName}-${editingRowKey}`}
           open={editDrawerOpen}
           onOpenChange={(open) => {
             setEditDrawerOpen(open);
@@ -975,14 +1105,12 @@ function DataTable({
 // Main DataViewer with tab management
 export function DataViewer() {
   const activeConnection = useActiveConnection();
-  const {
-    setSelectedTable,
-    dataTabs,
-    activeDataTabId,
-    setActiveDataTab,
-    removeDataTab,
-    clearAllDataTabs,
-  } = useStudioStore();
+  const setSelectedTable = useStudioStore((s) => s.setSelectedTable);
+  const dataTabs = useStudioStore((s) => s.dataTabs);
+  const activeDataTabId = useStudioStore((s) => s.activeDataTabId);
+  const setActiveDataTab = useStudioStore((s) => s.setActiveDataTab);
+  const removeDataTab = useStudioStore((s) => s.removeDataTab);
+  const clearAllDataTabs = useStudioStore((s) => s.clearAllDataTabs);
 
   const isRedis = activeConnection?.type === 'redis';
 

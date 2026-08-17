@@ -1,4 +1,6 @@
+import { useMemo } from 'react';
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import { TableInfo, ColumnInfo, QueryResult } from '../adapters/types';
 
 export type TabType = 'data' | 'schema' | 'query' | 'analytics';
@@ -54,6 +56,11 @@ interface StudioState {
   // Error state
   error: string | null;
 
+  // Which connection the persisted tabs belong to. Tabs name tables, so
+  // restoring them against a different database would show tabs for tables that
+  // may not exist there.
+  persistedForConnectionId: string | null;
+
   // Actions
   setTables: (tables: TableInfo[]) => void;
   setSelectedTable: (table: string | null) => void;
@@ -83,6 +90,10 @@ interface StudioState {
 
   // Reset state (for disconnection)
   reset: () => void;
+
+  // Called once the studio knows which connection is active. Keeps restored
+  // tabs only if they belong to that same connection.
+  hydrateForConnection: (connectionId: string) => void;
 }
 
 const generateTabId = (prefix = 'tab') => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -113,9 +124,12 @@ const initialState = {
   sidebarWidth: 280,
   tableFilter: '',
   error: null,
+  persistedForConnectionId: null as string | null,
 };
 
-export const useStudioStore = create<StudioState>()((set, get) => ({
+export const useStudioStore = create<StudioState>()(
+  persist(
+    (set, get) => ({
   ...initialState,
 
   setTables: (tables) => set({ tables }),
@@ -299,7 +313,60 @@ export const useStudioStore = create<StudioState>()((set, get) => ({
       activeQueryTabId: newTab.id,
     });
   },
-}));
+
+  hydrateForConnection: (connectionId) => {
+    const { persistedForConnectionId } = get();
+    if (persistedForConnectionId === connectionId) return;
+
+    // Restored tabs belong to a different database — drop them rather than
+    // showing tabs for tables that may not exist here.
+    const newTab: QueryTab = {
+      id: generateTabId(),
+      name: 'Query 1',
+      query: '',
+      result: null,
+      isExecuting: false,
+    };
+
+    set({
+      dataTabs: [],
+      activeDataTabId: null,
+      selectedTable: null,
+      tableSchema: [],
+      tableFilter: '',
+      queryTabs: [newTab],
+      activeQueryTabId: newTab.id,
+      error: null,
+      persistedForConnectionId: connectionId,
+    });
+  },
+    }),
+    {
+      name: 'db-studio-workspace',
+      // Open tabs, unsaved query text, and the sidebar layout survive a reload;
+      // loaded rows, schemas and transient flags do not.
+      //
+      // Query *results* are deliberately excluded: a result set can be thousands
+      // of rows, and localStorage has a few megabytes total.
+      partialize: (state) => ({
+        dataTabs: state.dataTabs,
+        activeDataTabId: state.activeDataTabId,
+        selectedTable: state.selectedTable,
+        activeTab: state.activeTab,
+        queryTabs: state.queryTabs.map((tab) => ({
+          ...tab,
+          result: null,
+          isExecuting: false,
+        })),
+        activeQueryTabId: state.activeQueryTabId,
+        queryHistory: state.queryHistory,
+        sidebarOpen: state.sidebarOpen,
+        sidebarWidth: state.sidebarWidth,
+        persistedForConnectionId: state.persistedForConnectionId,
+      }),
+    }
+  )
+);
 
 // Selectors
 export const useSelectedTable = () => useStudioStore((state) => state.selectedTable);
@@ -308,8 +375,15 @@ export const useFilteredTables = () => {
   const tables = useStudioStore((state) => state.tables);
   const filter = useStudioStore((state) => state.tableFilter);
 
-  if (!filter) return tables;
-
-  const lowerFilter = filter.toLowerCase();
-  return tables.filter((table) => table.name.toLowerCase().includes(lowerFilter));
+  // Memoized because the filtered branch allocates a new array on every call.
+  // Without this the sidebar received a new array identity on every render,
+  // defeating any downstream memoization and re-running the virtualizer's
+  // measurement for a list that had not actually changed.
+  return useMemo(() => {
+    if (!filter) return tables;
+    const lowerFilter = filter.toLowerCase();
+    return tables.filter((table) =>
+      table.name.toLowerCase().includes(lowerFilter)
+    );
+  }, [tables, filter]);
 };

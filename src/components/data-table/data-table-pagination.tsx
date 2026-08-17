@@ -46,7 +46,10 @@ export function DataTablePagination({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {[25, 50, 100].map((size) => (
+            {/* Larger pages are viable now that rows are virtualized: render
+                cost no longer scales with page size, so bigger pages just mean
+                fewer round trips. Capped at 500 to match the API ceiling. */}
+            {[25, 50, 100, 250, 500].map((size) => (
               <SelectItem key={size} value={size.toString()}>
                 {size}
               </SelectItem>
@@ -69,6 +72,7 @@ export function DataTablePagination({
             size="icon"
             className="h-8 w-8"
             onClick={() => onPageChange(1)}
+            aria-label="First page"
             disabled={page === 1}
           >
             <ChevronsLeft className="h-4 w-4" />
@@ -78,6 +82,7 @@ export function DataTablePagination({
             size="icon"
             className="h-8 w-8"
             onClick={() => onPageChange(page - 1)}
+            aria-label="Previous page"
             disabled={page === 1}
           >
             <ChevronLeft className="h-4 w-4" />
@@ -87,6 +92,7 @@ export function DataTablePagination({
             size="icon"
             className="h-8 w-8"
             onClick={() => onPageChange(page + 1)}
+            aria-label="Next page"
             disabled={page >= totalPages}
           >
             <ChevronRight className="h-4 w-4" />
@@ -96,6 +102,7 @@ export function DataTablePagination({
             size="icon"
             className="h-8 w-8"
             onClick={() => onPageChange(totalPages)}
+            aria-label="Last page"
             disabled={page >= totalPages}
           >
             <ChevronsRight className="h-4 w-4" />

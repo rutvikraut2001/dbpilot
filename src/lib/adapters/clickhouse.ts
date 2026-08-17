@@ -10,9 +10,13 @@ import {
   TableStats,
   IndexInfo,
   AdapterCapabilities,
+  ExecuteQueryOptions,
+  QueryDialect,
 } from "./types";
 
 export class ClickHouseAdapter extends BaseAdapter {
+  readonly dialect: QueryDialect = "sql";
+
   private client: ClickHouseClient | null = null;
 
   // ClickHouse is read-optimized; UPDATE/DELETE are expensive async mutations
@@ -230,7 +234,15 @@ export class ClickHouseAdapter extends BaseAdapter {
     options: QueryOptions
   ): Promise<PaginatedResult> {
     const client = this.getClient();
-    const { page, pageSize, sortBy, sortOrder, filters } = options;
+    const {
+      page,
+      pageSize,
+      sortBy,
+      sortOrder,
+      filters,
+      includeTotal = true,
+      orderBy,
+    } = options;
     const offset = (page - 1) * pageSize;
 
     // Validate table name
@@ -250,18 +262,30 @@ export class ClickHouseAdapter extends BaseAdapter {
       whereClause = `WHERE ${conditions.join(" AND ")}`;
     }
 
-    // Get count
-    const countResult = await client.query({
-      query: `SELECT count() as total FROM ${quotedTable} ${whereClause}`,
-      query_params: filterParams,
-      format: "JSONEachRow",
-    });
-    const countData = (await countResult.json()) as { total: string | number }[];
-    const total = Number(countData[0]?.total || 0);
+    // Get count — skipped when the caller already holds a cached total.
+    let total = 0;
+    if (includeTotal) {
+      const countResult = await client.query({
+        query: `SELECT count() as total FROM ${quotedTable} ${whereClause}`,
+        query_params: filterParams,
+        format: "JSONEachRow",
+      });
+      const countData = (await countResult.json()) as {
+        total: string | number;
+      }[];
+      total = Number(countData[0]?.total || 0);
+    }
 
-    // Build ORDER BY clause
+    // Build ORDER BY clause. An explicit orderBy wins — it is what keeps
+    // LIMIT/OFFSET paging over a whole table from repeating and skipping rows.
     let orderClause = "";
-    if (sortBy) {
+    if (orderBy && orderBy.length > 0) {
+      const columns = orderBy.map((col) => {
+        this.validateIdentifier(col);
+        return `\`${col}\``;
+      });
+      orderClause = `ORDER BY ${columns.join(", ")}`;
+    } else if (sortBy) {
       this.validateIdentifier(sortBy);
       orderClause = `ORDER BY \`${sortBy}\` ${sortOrder === "desc" ? "DESC" : "ASC"}`;
     }
@@ -317,7 +341,10 @@ export class ClickHouseAdapter extends BaseAdapter {
     );
   }
 
-  async executeQuery(query: string): Promise<QueryResult> {
+  async executeQuery(
+    query: string,
+    options?: ExecuteQueryOptions,
+  ): Promise<QueryResult> {
     const client = this.getClient();
     const startTime = Date.now();
 
@@ -325,6 +352,13 @@ export class ClickHouseAdapter extends BaseAdapter {
       const result = await client.query({
         query,
         format: "JSONEachRow",
+        // `readonly=1` is enforced by the ClickHouse server: it permits only
+        // read queries and forbids changing settings (so the query cannot turn
+        // readonly back off). This is the enforcement point for read-only mode,
+        // not the keyword check in the API route.
+        ...(options?.readOnly
+          ? { clickhouse_settings: { readonly: "1" } }
+          : {}),
       });
 
       const rows = (await result.json()) as Record<string, unknown>[];

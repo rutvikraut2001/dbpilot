@@ -10,9 +10,14 @@ import {
   TableStats,
   IndexInfo,
   AdapterCapabilities,
+  ExecuteQueryOptions,
+  QueryDialect,
 } from "./types";
+import { isWriteRedisCommand } from "../query-guard";
 
 export class RedisAdapter extends BaseAdapter {
+  readonly dialect: QueryDialect = "redis";
+
   private client: Redis | null = null;
   private currentDb: number = 0;
 
@@ -638,11 +643,21 @@ export class RedisAdapter extends BaseAdapter {
 
   // ── Query execution ────────────────────────────────────────────────
 
-  async executeQuery(query: string): Promise<QueryResult> {
+  async executeQuery(
+    query: string,
+    options?: ExecuteQueryOptions,
+  ): Promise<QueryResult> {
     const client = this.getClient();
     const startTime = Date.now();
 
     try {
+      // Redis enforcement is command inspection: a read-only ACL user would be
+      // stronger, but that's the operator's connection string to choose. Checked
+      // here as well as in the API route so the adapter is safe on its own.
+      if (options?.readOnly && isWriteRedisCommand(query)) {
+        throw new Error("Write operations are not allowed in read-only mode");
+      }
+
       // Parse Redis command: "GET mykey", "HGETALL myhash", etc.
       const parts = this.parseRedisCommand(query.trim());
       if (parts.length === 0) {

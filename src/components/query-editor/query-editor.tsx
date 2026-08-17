@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { Play, Plus, X, Clock, Download, Loader2 } from 'lucide-react';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import { Play, Plus, X, Clock, Download, Loader2, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
@@ -20,7 +21,15 @@ import {
   ResizableHandle,
 } from '@/components/ui/resizable';
 import { useStudioStore } from '@/lib/stores/studio';
+import { QueryResult } from '@/lib/adapters/types';
 import { useActiveConnection, useReadOnlyMode } from '@/lib/stores/connection';
+import { apiFetch, errorMessage } from '@/lib/utils/api-client';
+import { assessRisk } from '@/lib/query-guard';
+import { dialectForConnection } from '@/lib/utils/dialect';
+import {
+  DangerousQueryDialog,
+  QueryRiskDetails,
+} from './dangerous-query-dialog';
 
 // Dynamically import Monaco editor to avoid SSR issues
 const MonacoEditor = dynamic(
@@ -36,54 +45,206 @@ const MonacoEditor = dynamic(
   }
 );
 
+// Fixed row height, applied to each <tr> so the virtualizer's arithmetic and the
+// rendered layout agree exactly. Cells are nowrap, so rows never grow past it.
+const RESULT_ROW_HEIGHT = 33;
+
+function ResultCell({ value }: Readonly<{ value: unknown }>) {
+  if (value === null || value === undefined) {
+    return <span className="text-muted-foreground italic">NULL</span>;
+  }
+  if (typeof value === 'object') {
+    return (
+      <code className="text-xs bg-muted px-1 py-0.5 rounded">
+        {JSON.stringify(value)}
+      </code>
+    );
+  }
+  return <>{String(value)}</>;
+}
+
+/**
+ * Virtualized query results.
+ *
+ * A query can return far more rows than a browser can lay out — this previously
+ * rendered every returned row as a real <tr>, so a large result froze the tab.
+ * Only the visible window is mounted now; spacer rows above and below preserve
+ * the scroll height, which keeps the table's own layout algorithm intact
+ * (absolutely positioning rows would break column alignment).
+ */
+function QueryResultsTable({
+  columns,
+  rows,
+}: Readonly<{ columns: string[]; rows: Record<string, unknown>[] }>) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => RESULT_ROW_HEIGHT,
+    overscan: 12,
+  });
+
+  const virtualRows = virtualizer.getVirtualItems();
+  const paddingTop = virtualRows.length > 0 ? virtualRows[0].start : 0;
+  const paddingBottom =
+    virtualRows.length > 0
+      ? virtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
+      : 0;
+
+  return (
+    <div ref={scrollRef} className="flex-1 overflow-auto min-h-0">
+      <Table>
+        <TableHeader className="sticky top-0 z-10 bg-muted">
+          <TableRow>
+            {columns.map((col) => (
+              <TableHead key={col} className="whitespace-nowrap">
+                {col}
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {paddingTop > 0 && (
+            <tr aria-hidden="true" style={{ height: paddingTop }}>
+              <td colSpan={columns.length} />
+            </tr>
+          )}
+          {virtualRows.map((virtualRow) => {
+            const row = rows[virtualRow.index];
+            return (
+              <TableRow key={virtualRow.index} style={{ height: RESULT_ROW_HEIGHT }}>
+                {columns.map((col) => (
+                  <TableCell key={col} className="py-1.5 whitespace-nowrap">
+                    <ResultCell value={row[col]} />
+                  </TableCell>
+                ))}
+              </TableRow>
+            );
+          })}
+          {paddingBottom > 0 && (
+            <tr aria-hidden="true" style={{ height: paddingBottom }}>
+              <td colSpan={columns.length} />
+            </tr>
+          )}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
 export function QueryEditor() {
   const activeConnection = useActiveConnection();
   const readOnlyMode = useReadOnlyMode();
-  const {
-    queryTabs,
-    activeQueryTabId,
-    addQueryTab,
-    removeQueryTab,
-    setActiveQueryTab,
-    updateQueryTab,
-    addToHistory,
-  } = useStudioStore();
+  const queryTabs = useStudioStore((s) => s.queryTabs);
+  const activeQueryTabId = useStudioStore((s) => s.activeQueryTabId);
+  const addQueryTab = useStudioStore((s) => s.addQueryTab);
+  const removeQueryTab = useStudioStore((s) => s.removeQueryTab);
+  const setActiveQueryTab = useStudioStore((s) => s.setActiveQueryTab);
+  const updateQueryTab = useStudioStore((s) => s.updateQueryTab);
+  const addToHistory = useStudioStore((s) => s.addToHistory);
 
   const activeTab = queryTabs.find((tab) => tab.id === activeQueryTabId);
 
-  const executeQuery = useCallback(async () => {
+  // Pending confirmation for a statement that changes data.
+  const [pendingRisk, setPendingRisk] = useState<QueryRiskDetails | null>(null);
+  const [pendingQuery, setPendingQuery] = useState('');
+
+  const runQuery = useCallback(async () => {
     if (!activeConnection || !activeTab || !activeTab.query.trim()) return;
 
     updateQueryTab(activeTab.id, { isExecuting: true, result: null });
 
     try {
-      const response = await fetch('/api/query', {
+      // Note: `readOnly` is intentionally not sent. The server reads its own
+      // state; a client-supplied value is ignored.
+      const result = await apiFetch<QueryResult>('/api/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           connectionId: activeConnection.id,
           query: activeTab.query,
-          readOnly: readOnlyMode,
         }),
       });
 
-      const result = await response.json();
-
       updateQueryTab(activeTab.id, { result, isExecuting: false });
       addToHistory(activeTab.query, activeConnection.name);
-    } catch {
+    } catch (error) {
+      // Report what actually went wrong — a rate limit, a lost connection, or a
+      // rejected statement all used to collapse into "Failed to execute query".
       updateQueryTab(activeTab.id, {
         result: {
           rows: [],
           columns: [],
           rowCount: 0,
           executionTimeMs: 0,
-          error: 'Failed to execute query',
+          error: errorMessage(error),
         },
         isExecuting: false,
       });
+      addToHistory(activeTab.query, activeConnection.name);
     }
-  }, [activeConnection, activeTab, readOnlyMode, updateQueryTab, addToHistory]);
+  }, [activeConnection, activeTab, updateQueryTab, addToHistory]);
+
+  /**
+   * Gate execution behind a confirmation when the statement changes data.
+   *
+   * The risk assessment runs locally so a plain SELECT never pays a round trip.
+   * The row estimate needs the planner, so it is fetched in the background while
+   * the dialog is already on screen.
+   */
+  const executeQuery = useCallback(async () => {
+    if (!activeConnection || !activeTab || !activeTab.query.trim()) return;
+
+    const query = activeTab.query;
+
+    // In read-only mode the server refuses writes outright, so a confirmation
+    // dialog would be asking about something that cannot happen. Let it through
+    // and surface the server's actual refusal instead.
+    if (readOnlyMode) {
+      await runQuery();
+      return;
+    }
+
+    const risk = assessRisk(query, dialectForConnection(activeConnection.type));
+
+    if (risk.level === 'safe') {
+      await runQuery();
+      return;
+    }
+
+    setPendingQuery(query);
+    setPendingRisk({ ...risk, estimatedRows: null, isEstimating: risk.canEstimateRows });
+
+    if (!risk.canEstimateRows) return;
+
+    try {
+      const analysis = await apiFetch<{ estimatedRows: number | null }>(
+        '/api/query/analyze',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connectionId: activeConnection.id, query }),
+        }
+      );
+      setPendingRisk((current) =>
+        current
+          ? { ...current, estimatedRows: analysis.estimatedRows, isEstimating: false }
+          : current
+      );
+    } catch {
+      // A failed estimate must not block the decision — the dialog says it
+      // could not be determined and the user chooses anyway.
+      setPendingRisk((current) =>
+        current ? { ...current, estimatedRows: null, isEstimating: false } : current
+      );
+    }
+  }, [activeConnection, activeTab, readOnlyMode, runQuery]);
+
+  const confirmPendingQuery = useCallback(async () => {
+    setPendingRisk(null);
+    await runQuery();
+  }, [runQuery]);
 
   const handleEditorChange = (value: string | undefined) => {
     if (activeTab && value !== undefined) {
@@ -162,6 +323,7 @@ export function QueryEditor() {
                         e.stopPropagation();
                         removeQueryTab(tab.id);
                       }}
+                      aria-label={`Close ${tab.name}`}
                       className="p-1 hover:bg-muted rounded"
                     >
                       <X className="h-3 w-3" />
@@ -176,6 +338,7 @@ export function QueryEditor() {
             size="icon"
             className="h-8 w-8 ml-1"
             onClick={() => addQueryTab()}
+            aria-label="New query tab"
           >
             <Plus className="h-4 w-4" />
           </Button>
@@ -240,56 +403,54 @@ export function QueryEditor() {
                   )}
                 </div>
 
-                {/* Results Content — native scroll container (mirrors data-viewer) */}
-                <div className="flex-1 overflow-auto min-h-0">
-                  {activeTab.result.error ? (
-                    <div className="p-4 text-destructive">
-                      <pre className="text-sm whitespace-pre-wrap">
-                        {activeTab.result.error}
-                      </pre>
-                    </div>
-                  ) : activeTab.result.rows.length === 0 ? (
-                    <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-                      Query executed successfully. No rows returned.
-                    </div>
-                  ) : (
-                    <Table>
-                      <TableHeader className="sticky top-0 z-10 bg-muted">
-                        <TableRow>
-                          {activeTab.result.columns.map((col) => (
-                            <TableHead key={col} className="whitespace-nowrap">
-                              {col}
-                            </TableHead>
-                          ))}
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {activeTab.result.rows.map((row, i) => (
-                          <TableRow key={i}>
-                            {activeTab.result!.columns.map((col) => (
-                              <TableCell key={col} className="py-1.5 whitespace-nowrap">
-                                {row[col] === null || row[col] === undefined ? (
-                                  <span className="text-muted-foreground italic">NULL</span>
-                                ) : typeof row[col] === 'object' ? (
-                                  <code className="text-xs bg-muted px-1 py-0.5 rounded">
-                                    {JSON.stringify(row[col])}
-                                  </code>
-                                ) : (
-                                  String(row[col])
-                                )}
-                              </TableCell>
-                            ))}
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  )}
-                </div>
+                {/* Truncation notice — the server caps what it sends back. */}
+                {activeTab.result.truncated && (
+                  <div className="flex items-center gap-2 px-3 py-2 text-xs bg-amber-500/10 border-b border-amber-500/20 text-amber-700 dark:text-amber-400 shrink-0">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      Showing the first {activeTab.result.rows.length.toLocaleString()} of{' '}
+                      {activeTab.result.totalRows?.toLocaleString()} rows. Add a
+                      LIMIT clause to narrow the result, or export to get everything.
+                    </span>
+                  </div>
+                )}
+
+                {/* Results Content */}
+                {activeTab.result.error ? (
+                  <div className="flex-1 overflow-auto min-h-0 p-4 text-destructive">
+                    <pre className="text-sm whitespace-pre-wrap">
+                      {activeTab.result.error}
+                    </pre>
+                  </div>
+                ) : activeTab.result.rows.length === 0 ? (
+                  <div className="flex-1 flex items-center justify-center min-h-0 text-muted-foreground text-sm">
+                    Query executed successfully. No rows returned.
+                  </div>
+                ) : (
+                  <QueryResultsTable
+                    columns={activeTab.result.columns}
+                    rows={activeTab.result.rows}
+                  />
+                )}
               </div>
             </ResizablePanel>
           </>
         )}
       </ResizablePanelGroup>
+
+      {pendingRisk && (
+      <DangerousQueryDialog
+        risk={pendingRisk}
+        query={pendingQuery}
+        environmentLabel={
+          activeConnection?.environment === 'production'
+            ? `PRODUCTION — ${activeConnection.name}`
+            : undefined
+        }
+        onCancel={() => setPendingRisk(null)}
+        onConfirm={confirmPendingQuery}
+      />
+      )}
     </div>
   );
 }

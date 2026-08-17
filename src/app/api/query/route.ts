@@ -6,104 +6,47 @@ import {
   sanitizeError,
   ConnectionIdSchema,
 } from "@/lib/validation";
+import {
+  hasMultipleStatements,
+  isWriteSql,
+  isWriteMongoQuery,
+  isWriteRedisCommand,
+} from "@/lib/query-guard";
+import { QueryDialect } from "@/lib/adapters/types";
 
 /**
- * Check if a query is a write operation.
- * Strips SQL comments to prevent bypass attacks.
+ * Rows returned to the browser for an ad-hoc query.
+ *
+ * `SELECT * FROM big_table` has no LIMIT of its own, and the result previously
+ * went to the client whole — a multi-hundred-megabyte JSON payload that the
+ * grid then tried to render. Capping the response keeps the tab responsive and
+ * the payload bounded.
+ *
+ * Caveat: this bounds what crosses the wire, not what the driver buffers
+ * server-side — `pool.query` still materializes the full result. Streaming that
+ * properly needs a server-side cursor, which is a larger change.
  */
-function isWriteQuery(query: string): boolean {
-  // Remove SQL comments to prevent bypass
-  const stripped = query
-    .replace(/--.*$/gm, "") // Single-line comments
-    .replace(/\/\*[\s\S]*?\*\//g, "") // Block comments
-    .replace(/\s+/g, " ") // Normalize whitespace
-    .trim()
-    .toUpperCase();
-
-  // PostgreSQL/ClickHouse write keywords
-  const writeKeywords = [
-    "INSERT",
-    "UPDATE",
-    "DELETE",
-    "DROP",
-    "CREATE",
-    "ALTER",
-    "TRUNCATE",
-    "GRANT",
-    "REVOKE",
-    "COPY",
-    "VACUUM",
-    "REINDEX",
-    "CLUSTER",
-    "DISCARD",
-    "LOCK",
-  ];
-
-  // Check if query starts with any write keyword
-  const startsWithWrite = writeKeywords.some(
-    (keyword) =>
-      stripped.startsWith(keyword + " ") || stripped === keyword
-  );
-
-  // Also check for write operations in CTEs (WITH ... INSERT/UPDATE/DELETE)
-  const containsWriteInCTE = writeKeywords.some((keyword) =>
-    new RegExp(`\\)\\s*${keyword}\\s+`, "i").test(stripped)
-  );
-
-  return startsWithWrite || containsWriteInCTE;
-}
+const MAX_QUERY_ROWS = 5000;
 
 /**
- * Check if a MongoDB query contains write operations.
+ * Decide whether a query writes, using the inspection appropriate to the
+ * adapter's dialect.
+ *
+ * This is a pre-flight for clear error messages and for MongoDB/Redis, which
+ * have no engine-level read-only switch. For SQL adapters it is NOT the
+ * security boundary — PostgreSQL runs read-only queries inside a
+ * `SET TRANSACTION READ ONLY` transaction and ClickHouse applies `readonly=1`,
+ * so a write that slips past this check is still refused by the database.
  */
-function isMongoWriteQuery(query: string): boolean {
-  const mongoWriteOps = [
-    "insertOne",
-    "insertMany",
-    "updateOne",
-    "updateMany",
-    "deleteOne",
-    "deleteMany",
-    "drop",
-    "createIndex",
-    "dropIndex",
-    "dropIndexes",
-    "renameCollection",
-    "replaceOne",
-    "bulkWrite",
-  ];
-
-  return mongoWriteOps.some((op) => query.includes(`.${op}(`));
-}
-
-/**
- * Check if a Redis command is a write operation.
- */
-function isRedisWriteCommand(query: string): boolean {
-  const command = query.trim().split(/\s+/)[0]?.toUpperCase();
-  if (!command) return false;
-
-  const writeCommands = [
-    "SET", "SETNX", "SETEX", "PSETEX", "SETRANGE", "MSET", "MSETNX",
-    "GETSET", "GETDEL",
-    "DEL", "UNLINK",
-    "INCR", "DECR", "INCRBY", "DECRBY", "INCRBYFLOAT",
-    "APPEND",
-    "LPUSH", "RPUSH", "LPUSHX", "RPUSHX", "LPOP", "RPOP",
-    "LSET", "LTRIM", "LINSERT", "LREM",
-    "SADD", "SREM", "SPOP", "SMOVE", "SDIFFSTORE", "SINTERSTORE", "SUNIONSTORE",
-    "ZADD", "ZREM", "ZINCRBY", "ZPOPMIN", "ZPOPMAX",
-    "ZRANGESTORE", "ZDIFFSTORE", "ZINTERSTORE", "ZUNIONSTORE",
-    "HSET", "HSETNX", "HDEL", "HINCRBY", "HINCRBYFLOAT", "HMSET",
-    "EXPIRE", "EXPIREAT", "PEXPIRE", "PEXPIREAT", "PERSIST",
-    "RENAME", "RENAMENX",
-    "FLUSHDB", "FLUSHALL",
-    "XADD", "XDEL", "XTRIM",
-    "PFADD", "PFMERGE",
-    "RESTORE", "MIGRATE", "MOVE", "COPY",
-  ];
-
-  return writeCommands.includes(command);
+function looksLikeWrite(query: string, dialect: QueryDialect): boolean {
+  switch (dialect) {
+    case "sql":
+      return isWriteSql(query);
+    case "mongodb":
+      return isWriteMongoQuery(query);
+    case "redis":
+      return isWriteRedisCommand(query);
+  }
 }
 
 // Execute a query
@@ -134,11 +77,42 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // SERVER-SIDE read-only check - cannot be bypassed by client
-    if (isReadOnlyMode(connectionId!)) {
-      const isWrite = isWriteQuery(query) || isMongoWriteQuery(query) || isRedisWriteCommand(query);
+    const adapter = getCachedAdapter(connectionId!);
 
-      if (isWrite) {
+    if (!adapter) {
+      return NextResponse.json(
+        { error: "Connection not found. Please reconnect." },
+        { status: 404 }
+      );
+    }
+
+    // SERVER-SIDE read-only check. Sourced from server state only — the client
+    // cannot assert it, and FORCE_READ_ONLY overrides it.
+    const readOnly = isReadOnlyMode(connectionId!);
+
+    if (readOnly) {
+      // Reject multi-statement SQL outright. `pool.query(sql)` with no bind
+      // parameters uses the simple query protocol, which executes
+      // `SELECT 1; DROP TABLE users;` as a batch — so a harmless leading
+      // statement must not be able to carry a second one in behind it.
+      if (adapter.dialect === "sql" && hasMultipleStatements(query)) {
+        audit("query.execute", {
+          connectionId,
+          details: { queryLength: query.length, blocked: true },
+          success: false,
+          error: "Multi-statement query blocked in read-only mode",
+        });
+
+        return NextResponse.json(
+          {
+            error:
+              "Only a single statement may be executed in read-only mode. Remove the extra statements or disable read-only mode.",
+          },
+          { status: 403 }
+        );
+      }
+
+      if (looksLikeWrite(query, adapter.dialect)) {
         audit("query.execute", {
           connectionId,
           details: { queryLength: query.length, blocked: true },
@@ -153,20 +127,19 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const adapter = getCachedAdapter(connectionId!);
-
-    if (!adapter) {
-      return NextResponse.json(
-        { error: "Connection not found. Please reconnect." },
-        { status: 404 }
-      );
-    }
-
     if (!adapter.isConnected()) {
       await adapter.connect();
     }
 
-    const result = await adapter.executeQuery(query);
+    // Pass read-only down so the adapter enforces it at the engine level; the
+    // checks above are only a fast pre-flight.
+    const result = await adapter.executeQuery(query, { readOnly });
+
+    if (result.rows.length > MAX_QUERY_ROWS) {
+      result.totalRows = result.rows.length;
+      result.rows = result.rows.slice(0, MAX_QUERY_ROWS);
+      result.truncated = true;
+    }
 
     audit("query.execute", {
       connectionId,

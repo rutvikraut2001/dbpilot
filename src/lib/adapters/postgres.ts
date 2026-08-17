@@ -9,9 +9,14 @@ import {
   QueryResult,
   TableStats,
   IndexInfo,
+  ExecuteQueryOptions,
+  QueryDialect,
+  BulkDeleteResult,
 } from "./types";
 
 export class PostgresAdapter extends BaseAdapter {
+  readonly dialect: QueryDialect = "sql";
+
   private pool: Pool | null = null;
 
   async connect(): Promise<void> {
@@ -279,7 +284,15 @@ export class PostgresAdapter extends BaseAdapter {
     options: QueryOptions,
   ): Promise<PaginatedResult> {
     const pool = this.getPool();
-    const { page, pageSize, sortBy, sortOrder, filters } = options;
+    const {
+      page,
+      pageSize,
+      sortBy,
+      sortOrder,
+      filters,
+      includeTotal = true,
+      orderBy,
+    } = options;
 
     // Validate and quote table name to prevent SQL injection
     const quotedTable = this.quoteIdentifier(table);
@@ -298,19 +311,27 @@ export class PostgresAdapter extends BaseAdapter {
       whereClause = `WHERE ${conditions.join(" AND ")}`;
     }
 
-    // Build ORDER BY clause with validated column name
+    // Build ORDER BY clause with validated column names.
+    // An explicit multi-column orderBy wins: it is what makes paging through a
+    // whole table deterministic.
     let orderClause = "";
-    if (sortBy) {
+    if (orderBy && orderBy.length > 0) {
+      const columns = orderBy.map((col) => {
+        this.validateColumnName(col);
+        return `"${col}"`;
+      });
+      orderClause = `ORDER BY ${columns.join(", ")}`;
+    } else if (sortBy) {
       this.validateColumnName(sortBy);
       orderClause = `ORDER BY "${sortBy}" ${sortOrder === "desc" ? "DESC" : "ASC"}`;
     }
 
-    // Get total count
+    // Count and page fetch are independent, so run them together rather than
+    // making the page wait on a scan it doesn't need. Skipped entirely when the
+    // caller already has a cached total.
     const countQuery = `SELECT COUNT(*) as total FROM ${quotedTable} ${whereClause}`;
-    const countResult = await pool.query(countQuery, params);
-    const total = parseInt(countResult.rows[0].total);
+    const countParams = [...params];
 
-    // Get paginated data
     params.push(pageSize, offset);
     const dataQuery = `
       SELECT * FROM ${quotedTable}
@@ -318,7 +339,13 @@ export class PostgresAdapter extends BaseAdapter {
       ${orderClause}
       LIMIT $${paramIndex++} OFFSET $${paramIndex}
     `;
-    const dataResult = await pool.query(dataQuery, params);
+
+    const [dataResult, countResult] = await Promise.all([
+      pool.query(dataQuery, params),
+      includeTotal ? pool.query(countQuery, countParams) : Promise.resolve(null),
+    ]);
+
+    const total = countResult ? parseInt(countResult.rows[0].total) : 0;
 
     return {
       data: dataResult.rows,
@@ -477,7 +504,110 @@ export class PostgresAdapter extends BaseAdapter {
     return (result.rowCount ?? 0) > 0;
   }
 
-  async executeQuery(query: string): Promise<QueryResult> {
+  /**
+   * Delete many rows in a single statement.
+   *
+   * Builds one DELETE with the primary keys OR'd together, fully parameterized:
+   *   DELETE FROM t WHERE ("id" = $1) OR ("id" = $2) ...
+   * Composite keys AND their columns within each group. Every row goes in one
+   * round trip and one implicit transaction, so a partial failure rolls back
+   * rather than leaving half the selection deleted.
+   */
+  async deleteRows(
+    table: string,
+    primaryKeys: Record<string, unknown>[],
+  ): Promise<BulkDeleteResult> {
+    if (primaryKeys.length === 0) return { deleted: 0, failed: 0 };
+
+    const pool = this.getPool();
+    const quotedTable = this.quoteIdentifier(table);
+
+    const params: unknown[] = [];
+    const groups = primaryKeys.map((primaryKey) => {
+      const columns = Object.keys(primaryKey);
+      if (columns.length === 0) {
+        throw new Error("Cannot delete a row without primary key values");
+      }
+      const conditions = columns.map((col) => {
+        this.validateColumnName(col);
+        params.push(primaryKey[col]);
+        return `"${col}" = $${params.length}`;
+      });
+      return `(${conditions.join(" AND ")})`;
+    });
+
+    const query = `DELETE FROM ${quotedTable} WHERE ${groups.join(" OR ")}`;
+
+    try {
+      const result = await pool.query(query, params);
+      const deleted = result.rowCount ?? 0;
+      return { deleted, failed: Math.max(0, primaryKeys.length - deleted) };
+    } catch (error) {
+      return {
+        deleted: 0,
+        failed: primaryKeys.length,
+        error: error instanceof Error ? error.message : "Bulk delete failed",
+      };
+    }
+  }
+
+  /**
+   * Estimated rows a statement would affect, from the query planner.
+   *
+   * Uses plain `EXPLAIN`, never `EXPLAIN ANALYZE`. That distinction is the whole
+   * point: ANALYZE *executes* the statement to gather real timings, so using it
+   * to preview a DELETE would delete the rows. Plain EXPLAIN only plans.
+   *
+   * The BEGIN/ROLLBACK wrapper is defence in depth, not the mechanism — nothing
+   * should have been executed for it to roll back.
+   *
+   * The number is an estimate from table statistics and can be off by orders of
+   * magnitude on a table that has not been ANALYZEd; callers must present it as
+   * approximate.
+   */
+  async estimateAffectedRows(statement: string): Promise<number | null> {
+    const pool = this.getPool();
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        `EXPLAIN (FORMAT JSON) ${statement}`,
+      );
+      await client.query("ROLLBACK");
+
+      const plan = result.rows[0]?.["QUERY PLAN"];
+      const root = Array.isArray(plan) ? plan[0]?.Plan : undefined;
+      if (!root) return null;
+
+      // For INSERT/UPDATE/DELETE the root is a ModifyTable node, and its own
+      // "Plan Rows" is 0 — it emits rows only with RETURNING. The estimate of
+      // how many rows will be touched lives on the child scan node.
+      const node =
+        root["Node Type"] === "ModifyTable" && Array.isArray(root.Plans)
+          ? root.Plans[0]
+          : root;
+
+      const planRows = node?.["Plan Rows"];
+      return typeof planRows === "number" ? planRows : null;
+    } catch {
+      await client.query("ROLLBACK").catch(() => {
+        /* transaction may already be aborted */
+      });
+      return null;
+    } finally {
+      client.release();
+    }
+  }
+
+  async executeQuery(
+    query: string,
+    options?: ExecuteQueryOptions,
+  ): Promise<QueryResult> {
+    if (options?.readOnly) {
+      return this.executeReadOnlyQuery(query);
+    }
+
     const pool = this.getPool();
     const startTime = Date.now();
 
@@ -500,6 +630,56 @@ export class PostgresAdapter extends BaseAdapter {
         error:
           error instanceof Error ? error.message : "Query execution failed",
       };
+    }
+  }
+
+  /**
+   * Run a query inside a transaction PostgreSQL itself marks read-only, then
+   * roll back.
+   *
+   * This — not keyword matching on the query text — is what makes read-only mode
+   * a guarantee. The server rejects every write with `ERROR: cannot execute
+   * <verb> in a read-only transaction`, and that holds for constructs no parser
+   * of ours would catch: writes inside VOLATILE functions, `DO $$ ... $$` blocks,
+   * data-modifying CTEs, `CALL`ed procedures, and any second statement smuggled
+   * into a multi-statement batch.
+   *
+   * The trailing ROLLBACK is not a safety mechanism (nothing could have been
+   * written); it just avoids leaving an idle-in-transaction connection behind.
+   */
+  private async executeReadOnlyQuery(query: string): Promise<QueryResult> {
+    const pool = this.getPool();
+    const startTime = Date.now();
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+      await client.query("SET TRANSACTION READ ONLY");
+
+      const result = await client.query(query);
+      await client.query("ROLLBACK");
+
+      return {
+        rows: result.rows,
+        columns: result.fields?.map((f) => f.name) || [],
+        rowCount: result.rowCount ?? result.rows.length,
+        executionTimeMs: Date.now() - startTime,
+      };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {
+        /* connection may already be aborted */
+      });
+
+      return {
+        rows: [],
+        columns: [],
+        rowCount: 0,
+        executionTimeMs: Date.now() - startTime,
+        error:
+          error instanceof Error ? error.message : "Query execution failed",
+      };
+    } finally {
+      client.release();
     }
   }
 

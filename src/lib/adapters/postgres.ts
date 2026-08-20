@@ -19,6 +19,16 @@ export class PostgresAdapter extends BaseAdapter {
 
   private pool: Pool | null = null;
 
+  /**
+   * Backend process id per in-flight run, so a query can be cancelled.
+   *
+   * Cancellation in PostgreSQL is out-of-band: you cannot interrupt a connection
+   * that is waiting on a result, you ask the *server* to signal that backend
+   * from a different connection. That needs its pid, captured when the query
+   * starts.
+   */
+  private readonly runningBackends = new Map<string, number>();
+
   async connect(): Promise<void> {
     try {
       this.pool = new Pool({
@@ -605,14 +615,19 @@ export class PostgresAdapter extends BaseAdapter {
     options?: ExecuteQueryOptions,
   ): Promise<QueryResult> {
     if (options?.readOnly) {
-      return this.executeReadOnlyQuery(query);
+      return this.executeReadOnlyQuery(query, options.runId);
     }
 
     const pool = this.getPool();
     const startTime = Date.now();
+    // A dedicated client rather than pool.query, so the backend running this
+    // statement can be identified and cancelled. Behaviour is otherwise
+    // identical, including multi-statement batches and DDL.
+    const client = await pool.connect();
 
     try {
-      const result = await pool.query(query);
+      await this.registerBackend(client, options?.runId);
+      const result = await client.query(query);
       const executionTimeMs = Date.now() - startTime;
 
       return {
@@ -630,6 +645,49 @@ export class PostgresAdapter extends BaseAdapter {
         error:
           error instanceof Error ? error.message : "Query execution failed",
       };
+    } finally {
+      if (options?.runId) this.runningBackends.delete(options.runId);
+      client.release();
+    }
+  }
+
+  /** Record which backend is serving a run, so cancelQuery can signal it. */
+  private async registerBackend(
+    client: PoolClient,
+    runId?: string,
+  ): Promise<void> {
+    if (!runId) return;
+    try {
+      const result = await client.query<{ pid: number }>(
+        "SELECT pg_backend_pid() AS pid",
+      );
+      const pid = result.rows[0]?.pid;
+      if (typeof pid === "number") this.runningBackends.set(runId, pid);
+    } catch {
+      // Not fatal — the query still runs, it just cannot be cancelled.
+    }
+  }
+
+  /**
+   * Cancel an in-flight query.
+   *
+   * `pg_cancel_backend` requests a graceful abort of the current statement; the
+   * connection survives, unlike pg_terminate_backend. Sent over a *different*
+   * pooled connection, because the one running the query is blocked waiting on
+   * it.
+   */
+  async cancelQuery(runId: string): Promise<boolean> {
+    const pid = this.runningBackends.get(runId);
+    if (pid === undefined) return false;
+
+    try {
+      const result = await this.getPool().query<{ cancelled: boolean }>(
+        "SELECT pg_cancel_backend($1) AS cancelled",
+        [pid],
+      );
+      return result.rows[0]?.cancelled === true;
+    } catch {
+      return false;
     }
   }
 
@@ -647,12 +705,16 @@ export class PostgresAdapter extends BaseAdapter {
    * The trailing ROLLBACK is not a safety mechanism (nothing could have been
    * written); it just avoids leaving an idle-in-transaction connection behind.
    */
-  private async executeReadOnlyQuery(query: string): Promise<QueryResult> {
+  private async executeReadOnlyQuery(
+    query: string,
+    runId?: string,
+  ): Promise<QueryResult> {
     const pool = this.getPool();
     const startTime = Date.now();
     const client = await pool.connect();
 
     try {
+      await this.registerBackend(client, runId);
       await client.query("BEGIN");
       await client.query("SET TRANSACTION READ ONLY");
 
@@ -679,6 +741,7 @@ export class PostgresAdapter extends BaseAdapter {
           error instanceof Error ? error.message : "Query execution failed",
       };
     } finally {
+      if (runId) this.runningBackends.delete(runId);
       client.release();
     }
   }

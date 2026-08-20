@@ -11,10 +11,15 @@ interface MonacoEditorProps {
   value: string;
   onChange: (value: string | undefined) => void;
   language: string;
+  /**
+   * Reports the currently selected text (empty when nothing is selected), so the
+   * toolbar can offer to run just the selection.
+   */
+  onSelectionChange?: (selected: string) => void;
 }
 
 // Simple Monaco editor without workers (works reliably with any bundler)
-export function MonacoEditor({ value, onChange, language }: MonacoEditorProps) {
+export function MonacoEditor({ value, onChange, language, onSelectionChange }: MonacoEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<unknown>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -22,6 +27,14 @@ export function MonacoEditor({ value, onChange, language }: MonacoEditorProps) {
   const [monaco, setMonaco] = useState<typeof import('monaco-editor') | null>(null);
   const { resolvedTheme } = useTheme();
   const monacoTheme = resolvedTheme === 'dark' ? 'vs-dark' : 'vs';
+
+  // The editor instance is created once; reading callbacks through refs keeps
+  // that effect from needing them as dependencies (and from tearing the editor
+  // down whenever the parent re-renders).
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  onSelectionChangeRef.current = onSelectionChange;
 
   // Load Monaco
   useEffect(() => {
@@ -68,7 +81,17 @@ export function MonacoEditor({ value, onChange, language }: MonacoEditorProps) {
     });
 
     editor.onDidChangeModelContent(() => {
-      onChange(editor.getValue());
+      onChangeRef.current(editor.getValue());
+    });
+
+    editor.onDidChangeCursorSelection(() => {
+      const selection = editor.getSelection();
+      const model = editor.getModel();
+      const selected =
+        selection && model && !selection.isEmpty()
+          ? model.getValueInRange(selection)
+          : '';
+      onSelectionChangeRef.current?.(selected);
     });
 
     editorRef.current = editor;

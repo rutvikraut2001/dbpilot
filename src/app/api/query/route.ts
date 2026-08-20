@@ -58,6 +58,8 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     connectionId = body.connectionId;
     query = body.query;
+    // Optional handle so the client can cancel this run while it is in flight.
+    const runId = typeof body.runId === "string" ? body.runId : undefined;
 
     // Validate required fields
     const connectionIdResult = ConnectionIdSchema.safeParse(connectionId);
@@ -133,7 +135,7 @@ export async function POST(request: NextRequest) {
 
     // Pass read-only down so the adapter enforces it at the engine level; the
     // checks above are only a fast pre-flight.
-    const result = await adapter.executeQuery(query, { readOnly });
+    const result = await adapter.executeQuery(query, { readOnly, runId });
 
     if (result.rows.length > MAX_QUERY_ROWS) {
       result.totalRows = result.rows.length;

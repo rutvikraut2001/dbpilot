@@ -18,6 +18,36 @@ interface QueryTab {
   query: string;
   result: QueryResult | null;
   isExecuting: boolean;
+  /**
+   * Identifies the in-flight execution so it can be cancelled. Set while
+   * running, cleared when it settles.
+   */
+  runId?: string;
+  /**
+   * Whether the last result came from a highlighted selection rather than the
+   * whole editor. Surfaced in the results header: running a fragment can return
+   * a perfectly valid answer to a query the user did not think they ran.
+   */
+  ranSelection?: boolean;
+}
+
+export interface QueryHistoryEntry {
+  id: string;
+  query: string;
+  timestamp: number;
+  database: string;
+  /** Server-reported execution time, when the query reached the server. */
+  durationMs?: number;
+  rowCount?: number;
+  success: boolean;
+  error?: string;
+}
+
+export interface SavedQuery {
+  id: string;
+  name: string;
+  query: string;
+  createdAt: number;
 }
 
 interface StudioState {
@@ -46,7 +76,11 @@ interface StudioState {
   activeQueryTabId: string | null;
 
   // Query history
-  queryHistory: { query: string; timestamp: number; database: string }[];
+  queryHistory: QueryHistoryEntry[];
+
+  // Named queries the user chose to keep. Deliberately not scoped to a
+  // connection — a query worth saving is usually worth reusing elsewhere.
+  savedQueries: SavedQuery[];
 
   // Sidebar state
   sidebarOpen: boolean;
@@ -86,7 +120,12 @@ interface StudioState {
   removeQueryTab: (id: string) => void;
   setActiveQueryTab: (id: string) => void;
   updateQueryTab: (id: string, updates: Partial<QueryTab>) => void;
-  addToHistory: (query: string, database: string) => void;
+  addToHistory: (entry: Omit<QueryHistoryEntry, 'id' | 'timestamp'>) => void;
+  clearHistory: () => void;
+
+  // Saved query actions
+  saveQuery: (name: string, query: string) => string;
+  removeSavedQuery: (id: string) => void;
 
   // Reset state (for disconnection)
   reset: () => void;
@@ -119,7 +158,8 @@ const initialState = {
   activeDataTabId: null as string | null,
   queryTabs: [initialQueryTab],
   activeQueryTabId: initialQueryTab.id,
-  queryHistory: [],
+  queryHistory: [] as QueryHistoryEntry[],
+  savedQueries: [] as SavedQuery[],
   sidebarOpen: true,
   sidebarWidth: 280,
   tableFilter: '',
@@ -287,12 +327,31 @@ export const useStudioStore = create<StudioState>()(
     }));
   },
 
-  addToHistory: (query, database) => {
+  addToHistory: (entry) => {
     set((state) => ({
       queryHistory: [
-        { query, timestamp: Date.now(), database },
+        { ...entry, id: generateTabId('hist'), timestamp: Date.now() },
         ...state.queryHistory.slice(0, 99), // Keep last 100
       ],
+    }));
+  },
+
+  clearHistory: () => set({ queryHistory: [] }),
+
+  saveQuery: (name, query) => {
+    const saved: SavedQuery = {
+      id: generateTabId('saved'),
+      name,
+      query,
+      createdAt: Date.now(),
+    };
+    set((state) => ({ savedQueries: [saved, ...state.savedQueries] }));
+    return saved.id;
+  },
+
+  removeSavedQuery: (id) => {
+    set((state) => ({
+      savedQueries: state.savedQueries.filter((q) => q.id !== id),
     }));
   },
 
@@ -311,6 +370,10 @@ export const useStudioStore = create<StudioState>()(
       activeDataTabId: null,
       queryTabs: [newTab],
       activeQueryTabId: newTab.id,
+      // Saved queries are a library and history is a log; neither belongs to
+      // the connection being disconnected.
+      savedQueries: get().savedQueries,
+      queryHistory: get().queryHistory,
     });
   },
 
@@ -360,6 +423,7 @@ export const useStudioStore = create<StudioState>()(
         })),
         activeQueryTabId: state.activeQueryTabId,
         queryHistory: state.queryHistory,
+        savedQueries: state.savedQueries,
         sidebarOpen: state.sidebarOpen,
         sidebarWidth: state.sidebarWidth,
         persistedForConnectionId: state.persistedForConnectionId,
@@ -369,6 +433,8 @@ export const useStudioStore = create<StudioState>()(
 );
 
 // Selectors
+export const useQueryHistory = () => useStudioStore((state) => state.queryHistory);
+export const useSavedQueries = () => useStudioStore((state) => state.savedQueries);
 export const useSelectedTable = () => useStudioStore((state) => state.selectedTable);
 export const useTables = () => useStudioStore((state) => state.tables);
 export const useFilteredTables = () => {

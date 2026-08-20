@@ -123,6 +123,37 @@ describe("apiFetch", () => {
     await expect(apiFetch("/api/data")).rejects.toThrow("Invalid filters format");
   });
 
+  it("can return a 2xx body error as data instead of throwing", async () => {
+    // A SQL error is a meaningful result: it arrives with the execution time and
+    // row count the server measured, and throwing would discard them.
+    mockFetch(
+      jsonResponse({
+        rows: [],
+        columns: [],
+        rowCount: 0,
+        executionTimeMs: 3,
+        error: 'column "name" does not exist',
+      })
+    );
+
+    await expect(
+      apiFetch("/api/query", undefined, { bodyErrorIsFailure: false })
+    ).resolves.toMatchObject({
+      executionTimeMs: 3,
+      error: 'column "name" does not exist',
+    });
+  });
+
+  it("still throws on a non-2xx even when body errors are allowed", async () => {
+    // Opting out of the body check must not swallow a real HTTP failure.
+    mockFetch(jsonResponse({ error: "Too many requests." }, { status: 429 }));
+
+    const error = await rejection(
+      apiFetch("/api/query", undefined, { bodyErrorIsFailure: false })
+    );
+    expect(error.isRateLimited).toBe(true);
+  });
+
   it("does not mistake a data field named error-ish for an error", async () => {
     mockFetch(jsonResponse({ errorCount: 3, rows: [] }));
 

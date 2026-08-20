@@ -73,7 +73,9 @@ covers every row exactly once across a full walk; `deleteRows` removes exactly
 the rows given in a single statement and rolls back entirely on failure. Also
 `estimateAffectedRows`: it reports 1000 rows for an unscoped DELETE **and the
 table still holds 1000 rows afterwards**, which is the property that makes the
-preview safe. Requires `TEST_POSTGRES_URL`.
+preview safe. And `cancelQuery`: a `pg_sleep(30)` aborts in ~300ms on both the
+read-write and read-only paths, the connection stays usable afterwards, and
+repeated cancellations do not leak pooled clients. Requires `TEST_POSTGRES_URL`.
 
 **`tests/e2e`** — the workflows a user actually performs: connecting, browsing,
 paginating, sorting, following a foreign key, editing and deleting rows, bulk
@@ -110,6 +112,10 @@ runs unprompted; an unscoped DELETE requires the verb typed before the button
 enables; cancelling leaves the data intact; a scoped DELETE shows an estimated
 row count labelled as an estimate. Also the production treatment (stripe, badge,
 required reason) and that a write grant is time-boxed with a live countdown.
+
+**`tests/e2e/query-workspace.spec.ts`** — history (timing, row count, failures,
+survives a reload, clearable), saved queries (save/load/delete), running only the
+highlighted selection, and cancelling a long-running query.
 
 **`tests/e2e/request-efficiency.spec.ts`** — guards against redundant network
 work: opening a table fetches its schema once (the sidebar and the data viewer

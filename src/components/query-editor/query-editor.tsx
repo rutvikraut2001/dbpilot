@@ -3,7 +3,19 @@
 import { useCallback, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Play, Plus, X, Clock, Download, Loader2, AlertTriangle } from 'lucide-react';
+import {
+  Play,
+  Plus,
+  X,
+  Clock,
+  Download,
+  Loader2,
+  AlertTriangle,
+  History,
+  Star,
+  Square,
+  TextSelect,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
@@ -30,6 +42,9 @@ import {
   DangerousQueryDialog,
   QueryRiskDetails,
 } from './dangerous-query-dialog';
+import { QueryWorkspacePanel } from './query-workspace-panel';
+import { SaveQueryDialog } from './save-query-dialog';
+import { toast } from 'sonner';
 
 // Dynamically import Monaco editor to avoid SSR issues
 const MonacoEditor = dynamic(
@@ -143,48 +158,133 @@ export function QueryEditor() {
   const setActiveQueryTab = useStudioStore((s) => s.setActiveQueryTab);
   const updateQueryTab = useStudioStore((s) => s.updateQueryTab);
   const addToHistory = useStudioStore((s) => s.addToHistory);
+  const clearHistory = useStudioStore((s) => s.clearHistory);
+  const queryHistory = useStudioStore((s) => s.queryHistory);
+  const savedQueries = useStudioStore((s) => s.savedQueries);
+  const saveQueryToLibrary = useStudioStore((s) => s.saveQuery);
+  const removeSavedQuery = useStudioStore((s) => s.removeSavedQuery);
 
   const activeTab = queryTabs.find((tab) => tab.id === activeQueryTabId);
 
   // Pending confirmation for a statement that changes data.
   const [pendingRisk, setPendingRisk] = useState<QueryRiskDetails | null>(null);
   const [pendingQuery, setPendingQuery] = useState('');
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [selectedText, setSelectedText] = useState('');
+  const [queryToSave, setQueryToSave] = useState<string | null>(null);
 
-  const runQuery = useCallback(async () => {
-    if (!activeConnection || !activeTab || !activeTab.query.trim()) return;
+  // Running only the highlighted statement is the common case in a scratch pad
+  // full of queries.
+  const hasSelection = selectedText.trim().length > 0;
+  const effectiveQuery = hasSelection ? selectedText : (activeTab?.query ?? '');
 
-    updateQueryTab(activeTab.id, { isExecuting: true, result: null });
+  const runQuery = useCallback(
+    async (sql: string, fromSelection = false) => {
+      if (!activeConnection || !activeTab || !sql.trim()) return;
+
+      // Identifies this execution so it can be cancelled while in flight.
+      const runId = crypto.randomUUID();
+      updateQueryTab(activeTab.id, {
+        isExecuting: true,
+        result: null,
+        runId,
+        ranSelection: fromSelection,
+      });
+
+      try {
+        // Note: `readOnly` is intentionally not sent. The server reads its own
+        // state; a client-supplied value is ignored.
+        // A SQL error is a result, not a transport failure: the response carries
+        // the message *and* the execution time. Letting apiFetch throw on it
+        // would drop the timing and row count the server already measured.
+        const result = await apiFetch<QueryResult>(
+          '/api/query',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              connectionId: activeConnection.id,
+              query: sql,
+              runId,
+            }),
+          },
+          { bodyErrorIsFailure: false }
+        );
+
+        updateQueryTab(activeTab.id, {
+          result,
+          isExecuting: false,
+          runId: undefined,
+        });
+        addToHistory({
+          query: sql,
+          database: activeConnection.name,
+          durationMs: result.executionTimeMs,
+          rowCount: result.rowCount,
+          success: !result.error,
+          error: result.error,
+        });
+      } catch (error) {
+        // Report what actually went wrong — a rate limit, a lost connection, or a
+        // rejected statement all used to collapse into "Failed to execute query".
+        const message = errorMessage(error);
+        updateQueryTab(activeTab.id, {
+          result: {
+            rows: [],
+            columns: [],
+            rowCount: 0,
+            executionTimeMs: 0,
+            error: message,
+          },
+          isExecuting: false,
+          runId: undefined,
+        });
+        addToHistory({
+          query: sql,
+          database: activeConnection.name,
+          success: false,
+          error: message,
+        });
+      }
+    },
+    [activeConnection, activeTab, updateQueryTab, addToHistory]
+  );
+
+  /**
+   * Ask the database to abort the running statement.
+   *
+   * PostgreSQL cancellation is out-of-band — the server signals the backend from
+   * a separate connection — so the in-flight request resolves on its own with the
+   * cancellation error rather than being aborted here.
+   */
+  const runId = activeTab?.runId;
+  const cancelQuery = useCallback(async () => {
+    if (!activeConnection || !runId) return;
 
     try {
-      // Note: `readOnly` is intentionally not sent. The server reads its own
-      // state; a client-supplied value is ignored.
-      const result = await apiFetch<QueryResult>('/api/query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          connectionId: activeConnection.id,
-          query: activeTab.query,
-        }),
-      });
+      const { cancelled } = await apiFetch<{ cancelled: boolean }>(
+        '/api/query/cancel',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            connectionId: activeConnection.id,
+            runId,
+          }),
+        }
+      );
 
-      updateQueryTab(activeTab.id, { result, isExecuting: false });
-      addToHistory(activeTab.query, activeConnection.name);
+      if (!cancelled) {
+        toast.info('Nothing to cancel', {
+          description: 'The query had already finished.',
+        });
+      }
     } catch (error) {
-      // Report what actually went wrong — a rate limit, a lost connection, or a
-      // rejected statement all used to collapse into "Failed to execute query".
-      updateQueryTab(activeTab.id, {
-        result: {
-          rows: [],
-          columns: [],
-          rowCount: 0,
-          executionTimeMs: 0,
-          error: errorMessage(error),
-        },
-        isExecuting: false,
+      toast.error('Could not cancel the query', {
+        description: errorMessage(error),
       });
-      addToHistory(activeTab.query, activeConnection.name);
     }
-  }, [activeConnection, activeTab, updateQueryTab, addToHistory]);
+  }, [activeConnection, runId]);
 
   /**
    * Gate execution behind a confirmation when the statement changes data.
@@ -196,20 +296,21 @@ export function QueryEditor() {
   const executeQuery = useCallback(async () => {
     if (!activeConnection || !activeTab || !activeTab.query.trim()) return;
 
-    const query = activeTab.query;
+    const query = effectiveQuery;
+    if (!query.trim()) return;
 
     // In read-only mode the server refuses writes outright, so a confirmation
     // dialog would be asking about something that cannot happen. Let it through
     // and surface the server's actual refusal instead.
     if (readOnlyMode) {
-      await runQuery();
+      await runQuery(query, hasSelection);
       return;
     }
 
     const risk = assessRisk(query, dialectForConnection(activeConnection.type));
 
     if (risk.level === 'safe') {
-      await runQuery();
+      await runQuery(query, hasSelection);
       return;
     }
 
@@ -239,12 +340,38 @@ export function QueryEditor() {
         current ? { ...current, estimatedRows: null, isEstimating: false } : current
       );
     }
-  }, [activeConnection, activeTab, readOnlyMode, runQuery]);
+  }, [activeConnection, activeTab, effectiveQuery, hasSelection, readOnlyMode, runQuery]);
 
   const confirmPendingQuery = useCallback(async () => {
+    const sql = pendingQuery;
     setPendingRisk(null);
-    await runQuery();
-  }, [runQuery]);
+    await runQuery(sql, sql !== activeTab?.query);
+  }, [pendingQuery, runQuery, activeTab?.query]);
+
+  const handleSaveQuery = useCallback((sql: string) => {
+    const trimmed = sql.trim();
+    if (trimmed) setQueryToSave(trimmed);
+  }, []);
+
+  const confirmSaveQuery = useCallback(
+    (name: string) => {
+      if (queryToSave) {
+        saveQueryToLibrary(name, queryToSave);
+        toast.success('Query saved');
+      }
+      setQueryToSave(null);
+    },
+    [queryToSave, saveQueryToLibrary]
+  );
+
+  const handleLoadQuery = useCallback(
+    (sql: string) => {
+      if (!activeTab) return;
+      updateQueryTab(activeTab.id, { query: sql });
+      setWorkspaceOpen(false);
+    },
+    [activeTab, updateQueryTab]
+  );
 
   const handleEditorChange = (value: string | undefined) => {
     if (activeTab && value !== undefined) {
@@ -253,10 +380,19 @@ export function QueryEditor() {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    // Ctrl/Cmd + Enter to execute
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    if (!(e.ctrlKey || e.metaKey)) return;
+
+    // Ctrl/Cmd + Enter to execute (the selection, when there is one)
+    if (e.key === 'Enter') {
       e.preventDefault();
       executeQuery();
+      return;
+    }
+
+    // Ctrl/Cmd + S to save, rather than letting the browser save the page.
+    if (e.key === 's') {
+      e.preventDefault();
+      handleSaveQuery(effectiveQuery);
     }
   };
 
@@ -350,14 +486,59 @@ export function QueryEditor() {
               Read-only
             </Badge>
           )}
+          {hasSelection && (
+            <Badge
+              variant="outline"
+              className="border-amber-500/40 bg-amber-500/10 text-xs text-amber-700 dark:text-amber-400"
+              title="Run will execute only the highlighted text"
+            >
+              <TextSelect className="h-3 w-3 mr-1" />
+              Selection only
+            </Badge>
+          )}
+
           <Button
-            size="sm"
-            onClick={executeQuery}
-            disabled={!activeTab?.query.trim() || activeTab?.isExecuting}
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => handleSaveQuery(effectiveQuery)}
+            disabled={!effectiveQuery.trim()}
+            aria-label="Save query"
+            title="Save query (Ctrl/Cmd+S)"
           >
-            <Play className="h-4 w-4 mr-1" />
-            {activeTab?.isExecuting ? 'Running...' : 'Run'}
+            <Star className="h-4 w-4" />
           </Button>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => setWorkspaceOpen(true)}
+            aria-label="Query history and saved queries"
+            title="History and saved queries"
+          >
+            <History className="h-4 w-4" />
+          </Button>
+
+          {activeTab?.isExecuting && activeTab.runId ? (
+            <Button size="sm" variant="destructive" onClick={cancelQuery}>
+              <Square className="h-4 w-4 mr-1" />
+              Cancel
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              onClick={executeQuery}
+              disabled={!effectiveQuery.trim() || activeTab?.isExecuting}
+            >
+              <Play className="h-4 w-4 mr-1" />
+              {activeTab?.isExecuting
+                ? 'Running...'
+                : hasSelection
+                ? 'Run selection'
+                : 'Run'}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -369,6 +550,7 @@ export function QueryEditor() {
               language={getLanguage()}
               value={activeTab?.query || ''}
               onChange={handleEditorChange}
+              onSelectionChange={setSelectedText}
             />
           </div>
         </ResizablePanel>
@@ -384,15 +566,27 @@ export function QueryEditor() {
                     {activeTab.result.error ? (
                       <Badge variant="destructive">Error</Badge>
                     ) : (
-                      <>
-                        <span className="text-sm font-medium">
-                          {activeTab.result.rowCount} row{activeTab.result.rowCount !== 1 ? 's' : ''}
-                        </span>
-                        <span className="text-xs text-muted-foreground flex items-center gap-1">
-                          <Clock className="h-3 w-3" />
-                          {activeTab.result.executionTimeMs}ms
-                        </span>
-                      </>
+                      <span className="text-sm font-medium">
+                        {activeTab.result.rowCount} row{activeTab.result.rowCount !== 1 ? 's' : ''}
+                      </span>
+                    )}
+                    {activeTab.ranSelection && (
+                      <Badge
+                        variant="outline"
+                        className="border-amber-500/40 bg-amber-500/10 text-xs text-amber-700 dark:text-amber-400"
+                        title="Only the highlighted text was executed, not the whole editor"
+                      >
+                        <TextSelect className="mr-1 h-3 w-3" />
+                        Ran selection only
+                      </Badge>
+                    )}
+                    {/* Timing is shown either way — knowing a failing query took
+                        5ms rather than 30s tells you where the problem is. */}
+                    {activeTab.result.executionTimeMs > 0 && (
+                      <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        {activeTab.result.executionTimeMs}ms
+                      </span>
                     )}
                   </div>
                   {!activeTab.result.error && activeTab.result.rows.length > 0 && (
@@ -437,6 +631,25 @@ export function QueryEditor() {
           </>
         )}
       </ResizablePanelGroup>
+
+      {queryToSave !== null && (
+        <SaveQueryDialog
+          query={queryToSave}
+          onCancel={() => setQueryToSave(null)}
+          onSave={confirmSaveQuery}
+        />
+      )}
+
+      <QueryWorkspacePanel
+        open={workspaceOpen}
+        onOpenChange={setWorkspaceOpen}
+        history={queryHistory}
+        savedQueries={savedQueries}
+        onLoadQuery={handleLoadQuery}
+        onSaveQuery={handleSaveQuery}
+        onRemoveSaved={removeSavedQuery}
+        onClearHistory={clearHistory}
+      />
 
       {pendingRisk && (
       <DangerousQueryDialog

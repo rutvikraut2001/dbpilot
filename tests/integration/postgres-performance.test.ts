@@ -321,3 +321,87 @@ describe.skipIf(!CONNECTION_STRING)("PostgreSQL row estimation", () => {
     expect(after.rows[0].ok).toBe(1);
   });
 });
+
+describe.skipIf(!CONNECTION_STRING)("PostgreSQL query cancellation", () => {
+  let adapter: PostgresAdapter;
+
+  beforeAll(async () => {
+    adapter = new PostgresAdapter(CONNECTION_STRING!);
+    await adapter.connect();
+  });
+
+  afterAll(async () => {
+    if (adapter) await adapter.disconnect();
+  });
+
+  it("aborts a long-running query", async () => {
+    const runId = "run-cancel-1";
+
+    // pg_sleep would otherwise run for 30s (the statement timeout).
+    const execution = adapter.executeQuery("SELECT pg_sleep(30)", { runId });
+
+    // Give the query time to reach the server and register its backend pid.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(await adapter.cancelQuery(runId)).toBe(true);
+
+    const result = await execution;
+    expect(result.error).toMatch(/cancel/i);
+    // Well under the 30s the sleep asked for.
+    expect(result.executionTimeMs).toBeLessThan(5_000);
+  }, 20_000);
+
+  it("aborts a long-running read-only query too", async () => {
+    // The read-only path runs inside a transaction; cancelling must still work.
+    const runId = "run-cancel-2";
+    const execution = adapter.executeQuery("SELECT pg_sleep(30)", {
+      runId,
+      readOnly: true,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(await adapter.cancelQuery(runId)).toBe(true);
+
+    const result = await execution;
+    expect(result.error).toMatch(/cancel/i);
+  }, 20_000);
+
+  it("reports false for an unknown run", async () => {
+    expect(await adapter.cancelQuery("never-started")).toBe(false);
+  });
+
+  it("reports false once the query has finished", async () => {
+    const runId = "run-cancel-3";
+    const result = await adapter.executeQuery("SELECT 1 AS ok", { runId });
+    expect(result.error).toBeUndefined();
+
+    // The run is deregistered when it settles, so there is nothing to signal.
+    expect(await adapter.cancelQuery(runId)).toBe(false);
+  });
+
+  it("leaves the connection usable after a cancellation", async () => {
+    const runId = "run-cancel-4";
+    const execution = adapter.executeQuery("SELECT pg_sleep(30)", { runId });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await adapter.cancelQuery(runId);
+    await execution;
+
+    const after = await adapter.executeQuery("SELECT 42 AS answer");
+    expect(after.error).toBeUndefined();
+    expect(after.rows[0].answer).toBe(42);
+  }, 20_000);
+
+  it("does not leak pooled connections across many cancellations", async () => {
+    // Each run checks out a dedicated client; a leak here would exhaust the pool.
+    for (let i = 0; i < 5; i++) {
+      const runId = `run-cancel-loop-${i}`;
+      const execution = adapter.executeQuery("SELECT pg_sleep(10)", { runId });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      await adapter.cancelQuery(runId);
+      await execution;
+    }
+
+    const after = await adapter.executeQuery("SELECT 1 AS ok");
+    expect(after.error).toBeUndefined();
+  }, 40_000);
+});

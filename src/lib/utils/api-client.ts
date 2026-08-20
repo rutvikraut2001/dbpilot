@@ -66,15 +66,27 @@ async function readErrorMessage(response: Response): Promise<string> {
   return `Request failed with status ${response.status}`;
 }
 
+export interface ApiFetchOptions {
+  /**
+   * Whether a 2xx body carrying an `error` field counts as a failure.
+   * Defaults to true, because most routes report problems that way and callers
+   * were reading straight past it.
+   *
+   * Set false where a reported error is itself a meaningful result. `/api/query`
+   * is the case: a SQL error comes back alongside `executionTimeMs` and
+   * `rowCount`, and throwing would discard them — a failed query would lose the
+   * timing the server had already measured.
+   */
+  bodyErrorIsFailure?: boolean;
+}
+
 /**
  * Fetch and parse a JSON API response, throwing `ApiError` on any failure.
- *
- * Also treats a 2xx body carrying an `error` field as a failure: several routes
- * report problems that way, and callers were reading straight past it.
  */
 export async function apiFetch<T>(
   url: string,
-  init?: RequestInit
+  init?: RequestInit,
+  options?: ApiFetchOptions
 ): Promise<T> {
   let response: Response;
 
@@ -111,6 +123,7 @@ export async function apiFetch<T>(
   }
 
   if (
+    options?.bodyErrorIsFailure !== false &&
     body &&
     typeof body === 'object' &&
     'error' in body &&

@@ -16,6 +16,12 @@ export interface ExecuteQueryOptions {
    * rather than by inspecting the query text.
    */
   readOnly?: boolean;
+  /**
+   * Caller-supplied handle for this execution, so it can be cancelled while in
+   * flight. Adapters that support cancellation register the underlying backend
+   * against it for the duration of the query.
+   */
+  runId?: string;
 }
 
 export interface AdapterCapabilities {
@@ -196,6 +202,13 @@ export interface DatabaseAdapter {
    * Returns null when the adapter or the statement cannot be estimated.
    */
   estimateAffectedRows?(statement: string): Promise<number | null>;
+
+  /**
+   * Ask the database to abort an in-flight query started with this `runId`.
+   * Returns false when the run is unknown (already finished) or the engine
+   * offers no way to cancel.
+   */
+  cancelQuery?(runId: string): Promise<boolean>;
 
   // Analytics
   getTableStats(table: string): Promise<TableStats>;

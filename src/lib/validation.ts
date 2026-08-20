@@ -70,6 +70,8 @@ export function sanitizeError(error: unknown): string {
 
     // Remove credentials from connection strings
     msg = msg.replace(/postgresql:\/\/[^@]+@/gi, "postgresql://***@");
+    msg = msg.replace(/mysql:\/\/[^@]+@/gi, "mysql://***@");
+    msg = msg.replace(/mariadb:\/\/[^@]+@/gi, "mariadb://***@");
     msg = msg.replace(/mongodb:\/\/[^@]+@/gi, "mongodb://***@");
     msg = msg.replace(/mongodb\+srv:\/\/[^@]+@/gi, "mongodb+srv://***@");
     msg = msg.replace(/clickhouse:\/\/[^@]+@/gi, "clickhouse://***@");

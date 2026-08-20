@@ -12,6 +12,11 @@ export const supportedDatabases: { type: DatabaseType; name: string; placeholder
     placeholder: 'postgresql://user:password@localhost:5432/dbname',
   },
   {
+    type: 'mysql',
+    name: 'MySQL',
+    placeholder: 'mysql://user:password@localhost:3306/dbname',
+  },
+  {
     type: 'mongodb',
     name: 'MongoDB',
     placeholder: 'mongodb://user:password@localhost:27017/dbname',

@@ -41,6 +41,14 @@ const DB_CONFIG: Record<
     dotColor: 'bg-blue-500',
     badgeBg: 'bg-blue-500/10 text-blue-600 dark:text-blue-400',
   },
+  mysql: {
+    label: 'MySQL',
+    color: 'text-teal-500',
+    bgColor: 'bg-teal-500/10',
+    borderColor: 'border-teal-500/30',
+    dotColor: 'bg-teal-500',
+    badgeBg: 'bg-teal-500/10 text-teal-600 dark:text-teal-400',
+  },
   mongodb: {
     label: 'MongoDB',
     color: 'text-green-500',

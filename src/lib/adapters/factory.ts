@@ -2,6 +2,7 @@ import 'server-only';
 
 import { DatabaseAdapter, DatabaseType, SSHTunnelConfig } from './types';
 import { PostgresAdapter } from './postgres';
+import { MySQLAdapter } from './mysql';
 import { MongoDBAdapter } from './mongodb';
 import { ClickHouseAdapter } from './clickhouse';
 import { RedisAdapter } from './redis';
@@ -28,6 +29,8 @@ export function createAdapter(type: DatabaseType, connectionString: string): Dat
   switch (type) {
     case 'postgresql':
       return new PostgresAdapter(connectionString);
+    case 'mysql':
+      return new MySQLAdapter(connectionString);
     case 'mongodb':
       return new MongoDBAdapter(connectionString);
     case 'clickhouse':

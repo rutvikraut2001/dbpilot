@@ -1,6 +1,6 @@
 // Database Adapter Types - Unified interface for all database types
 
-export type DatabaseType = 'postgresql' | 'mongodb' | 'clickhouse' | 'redis';
+export type DatabaseType = 'postgresql' | 'mysql' | 'mongodb' | 'clickhouse' | 'redis';
 
 /**
  * Query language family. Determines how read-only mode is enforced:
@@ -12,8 +12,9 @@ export type QueryDialect = 'sql' | 'mongodb' | 'redis';
 export interface ExecuteQueryOptions {
   /**
    * Execute with writes prohibited. SQL adapters must enforce this at the engine
-   * level (PostgreSQL `SET TRANSACTION READ ONLY`, ClickHouse `readonly=1`)
-   * rather than by inspecting the query text.
+   * level (PostgreSQL `SET TRANSACTION READ ONLY`, MySQL
+   * `START TRANSACTION READ ONLY`, ClickHouse `readonly=1`) rather than by
+   * inspecting the query text.
    */
   readOnly?: boolean;
 }

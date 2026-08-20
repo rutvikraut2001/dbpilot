@@ -62,9 +62,26 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      # Pinned to the LTS series rather than `mysql:8`: 8.4 changed the server's
+      # authentication defaults, and a floating tag would move CI underneath the
+      # fixture.
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: mysql
+          MYSQL_DATABASE: testdb
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pmysql"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 15
+
     env:
       TEST_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/testdb
       E2E_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/testdb
+      TEST_MYSQL_URL: mysql://root:mysql@127.0.0.1:3306/testdb
 
     steps:
       - uses: actions/checkout@v4
@@ -86,8 +103,8 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Integration tests against PostgreSQL
-        # Proves read-only mode is enforced by the engine, not by parsing SQL.
+      - name: Integration tests against PostgreSQL and MySQL
+        # Proves read-only mode is enforced by each engine, not by parsing SQL.
         run: npm test
 
       - name: E2E tests

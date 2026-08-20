@@ -6,7 +6,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "DB Studio - Universal Database Manager",
-  description: "Universal database manager for PostgreSQL, MongoDB, ClickHouse and Redis. Browse schemas, edit data, run queries, and visualize relationships.",
+  description: "Universal database manager for PostgreSQL, MySQL, MongoDB, ClickHouse and Redis. Browse schemas, edit data, run queries, and visualize relationships.",
 };
 
 export default function RootLayout({

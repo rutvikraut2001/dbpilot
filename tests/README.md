@@ -5,7 +5,7 @@ Three layers, each runnable on its own.
 | Layer | Location | Needs a database? | Command |
 | --- | --- | --- | --- |
 | Unit | `tests/unit` | no | `npm test` |
-| API / integration | `tests/integration` | PostgreSQL for one file | `npm test` |
+| API / integration | `tests/integration` | PostgreSQL and MySQL for some files | `npm test` |
 | End-to-end | `tests/e2e` | yes | `npm run test:e2e` |
 
 Suites that need a database skip themselves when their environment variable is
@@ -14,11 +14,11 @@ unset, so `npm test` is always safe to run with nothing else running.
 ## Starting the fixture databases
 
 ```bash
-docker compose --profile with-db up -d postgres
+docker compose --profile with-db up -d postgres mysql
 ```
 
-That publishes PostgreSQL on `localhost:5432` as `postgres/postgres`, database
-`testdb`.
+That publishes PostgreSQL on `localhost:5432` as `postgres/postgres` and MySQL
+on `localhost:3306` as `root/mysql`, both with database `testdb`.
 
 ## Running everything
 
@@ -28,6 +28,9 @@ npm test
 
 # Add the PostgreSQL integration suite
 TEST_POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/testdb npm test
+
+# Add the MySQL integration suites
+TEST_MYSQL_URL=mysql://root:mysql@localhost:3306/testdb npm test
 
 # End-to-end
 E2E_POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/testdb npm run test:e2e
@@ -62,6 +65,35 @@ a real PostgreSQL, going straight through the adapter so the keyword pre-flight
 is bypassed entirely. Covers what no parser can catch: writes inside `VOLATILE`
 functions, `DO` blocks, data-modifying CTEs, and a write as the second statement
 of a batch. Requires `TEST_POSTGRES_URL`.
+
+**`tests/integration/mysql-read-only.test.ts`** — the same guarantees as the
+PostgreSQL suite below, against a real MySQL and through the adapter, so the
+keyword pre-flight is bypassed entirely. Covers what no parser can catch: a
+write inside a `CALL`ed stored procedure, DDL, `REPLACE`, `INSERT ... ON
+DUPLICATE KEY UPDATE`, and `GRANT`. Also asserts the pooled connection is
+neither left read-only nor mid-transaction afterwards — it is a small pool, so a
+leaked session setting would refuse the next legitimate write. Requires
+`TEST_MYSQL_URL`.
+
+**`tests/integration/mysql-schema.test.ts`** — introspection and CRUD where
+MySQL differs from PostgreSQL, which is where this adapter can be wrong while
+still looking right: enum members parsed out of `COLUMN_TYPE` (there is no
+catalogue to join), insert and update reading the row back because there is no
+`RETURNING`, `tinyint(1)` receiving the grid's string `"false"`, and a bigint key
+arriving as text rather than a rounded number. Requires `TEST_MYSQL_URL`.
+
+**`tests/integration/mysql-performance.test.ts`** — the same paging, bulk-delete
+and estimation contract as the PostgreSQL suite, so both adapters are held to one
+standard. The row estimates assert exact numbers: MySQL reports
+`filtered: 100.00` for *every* DML plan, so a scoped `DELETE` matching half the
+table would otherwise be previewed as the whole table. Requires
+`TEST_MYSQL_URL`.
+
+**`tests/unit/mysql-connection.test.ts`** — everything about MySQL support that
+needs no server: connection strings rejected before a socket is opened (with the
+reason, not a ten-second timeout), the `mariadb://` alias, the dialect that
+decides which read-only enforcement applies, the Unix-socket fallback
+strategies, and credential redaction in error messages.
 
 **`tests/unit/cache-keys.test.ts`** — the row-count cache keys: filter keys are
 order-independent (or the cache would miss every request), and a table's
@@ -133,5 +165,11 @@ same way:
 2. add an integration suite guarded by a `TEST_<ENGINE>_URL` variable
 3. add the service to `.github/workflows/ci.yml`
 
-Only PostgreSQL has a service in CI today, because only PostgreSQL has tests
-that need one.
+PostgreSQL and MySQL have services in CI; MongoDB, ClickHouse and Redis do not,
+because they have no tests that need one yet.
+
+The E2E suite is PostgreSQL-only. Its fixture and helpers are written against
+`tests/fixtures/postgres/seed.sql`, so covering a second engine end to end means
+parameterizing the harness rather than adding a file — the MySQL adapter is
+covered at the integration layer instead, which is where the engine-specific
+behaviour lives.

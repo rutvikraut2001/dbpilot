@@ -1,6 +1,6 @@
 import type { DatabaseType } from '@/lib/adapters/types';
 
-type ErrorCategory = 'refused' | 'dns' | 'timeout' | 'dropped' | 'permission' | 'auth' | 'unreachable' | 'unknown';
+type ErrorCategory = 'refused' | 'dns' | 'timeout' | 'dropped' | 'permission' | 'auth' | 'not-found' | 'unreachable' | 'unknown';
 
 export interface ConnectionDiagnostics {
   category: ErrorCategory;
@@ -32,6 +32,18 @@ function replaceHost(connectionString: string, oldHost: string, newHost: string)
 
 function isLocalhostVariant(hostname: string): boolean {
   return ['localhost', '127.0.0.1', '::1'].includes(hostname.toLowerCase());
+}
+
+/** Where the MySQL and MariaDB packages put their Unix socket. */
+const MYSQL_SOCKET_PATHS = [
+  '/var/run/mysqld/mysqld.sock',
+  '/tmp/mysql.sock',
+] as const;
+
+/** Append a query parameter, picking `?` or `&` as the string requires. */
+function withParam(connectionString: string, key: string, value: string): string {
+  const separator = connectionString.includes('?') ? '&' : '?';
+  return `${connectionString}${separator}${key}=${value}`;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -99,6 +111,43 @@ export function diagnoseConnectionError(error: unknown, dbType: DatabaseType, co
       suggestions: [
         'If using Docker, ensure proper network access',
         'Check that the port is not restricted',
+      ],
+      isRetryable: false,
+    };
+  }
+
+  // MySQL 8 defaults to caching_sha2_password. An old client, or a server
+  // reached over a plaintext connection, fails here with credentials that are
+  // perfectly correct — so this must not be reported as a wrong password.
+  if (
+    lower.includes('er_not_supported_auth_mode') ||
+    lower.includes('does not support authentication protocol') ||
+    lower.includes('auth_gssapi_client') ||
+    lower.includes('unknown authentication plugin')
+  ) {
+    return {
+      category: 'auth',
+      userMessage:
+        'The server requires an authentication plugin this client cannot use. The credentials themselves may be fine.',
+      suggestions: [
+        "For MySQL 8, grant the user mysql_native_password: ALTER USER 'user'@'%' IDENTIFIED WITH mysql_native_password BY 'password'",
+        'Or enable TLS on the connection so caching_sha2_password can complete (add ?ssl-mode=REQUIRED)',
+        'Verify the server version supports the plugin the user is defined with',
+      ],
+      isRetryable: false,
+    };
+  }
+
+  // ER_BAD_DB_ERROR. The host and credentials worked; only the database name is
+  // wrong, and retrying other hosts would waste the user's time.
+  if (lower.includes('unknown database')) {
+    return {
+      category: 'not-found',
+      userMessage: 'The server is reachable but the named database does not exist.',
+      suggestions: [
+        'Check the database name after the last / in the connection string',
+        'List the available databases with SHOW DATABASES',
+        'MySQL database names are case-sensitive on Linux',
       ],
       isRetryable: false,
     };
@@ -184,11 +233,21 @@ export function buildConnectionStrategies(
     // For PostgreSQL, try Unix socket
     if (type === 'postgresql') {
       strategies.push({
-        connectionString: connectionString.includes('?')
-          ? `${connectionString}&host=/var/run/postgresql`
-          : `${connectionString}?host=/var/run/postgresql`,
+        connectionString: withParam(connectionString, 'host', '/var/run/postgresql'),
         label: 'Unix socket',
       });
+    }
+
+    // A distribution-packaged MySQL often listens on its socket only, with
+    // skip-networking or a bind-address that excludes the loopback the user
+    // typed. Both common socket paths are worth a try before giving up.
+    if (type === 'mysql') {
+      for (const socket of MYSQL_SOCKET_PATHS) {
+        strategies.push({
+          connectionString: withParam(connectionString, 'socket', socket),
+          label: `Unix socket (${socket})`,
+        });
+      }
     }
   } else if (hostname === 'host.docker.internal') {
     // Try localhost and Docker bridge

@@ -107,8 +107,15 @@ async function testWithStrategies(
       lastError = error;
       lastDiagnostics = diagnoseConnectionError(error, type, strategy.connectionString);
 
-      // Don't retry auth errors with different hosts
-      if (lastDiagnostics.category === 'auth') break;
+      // Don't retry with different hosts when the host was never the problem:
+      // bad credentials and a missing database fail identically everywhere, and
+      // walking the remaining strategies only delays the real message.
+      if (
+        lastDiagnostics.category === 'auth' ||
+        lastDiagnostics.category === 'not-found'
+      ) {
+        break;
+      }
     }
   }
 

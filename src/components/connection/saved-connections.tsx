@@ -23,6 +23,7 @@ import { ConnectionConfig, DatabaseType } from '@/lib/adapters/types';
 
 const DB_TYPE_LABEL: Record<DatabaseType, string> = {
   postgresql: 'PostgreSQL',
+  mysql: 'MySQL',
   mongodb: 'MongoDB',
   clickhouse: 'ClickHouse',
   redis: 'Redis',

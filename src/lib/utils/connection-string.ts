@@ -100,6 +100,7 @@ export function parsePort(connectionString: string, defaultPort: number): number
  */
 export const DB_DEFAULT_PORTS: Record<string, number> = {
   postgresql: 5432,
+  mysql: 3306,
   mongodb: 27017,
   clickhouse: 8123,
   redis: 6379,

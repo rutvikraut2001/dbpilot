@@ -107,6 +107,11 @@ const DB_BADGES = [
     color: "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/25",
   },
   {
+    name: "MySQL",
+    color:
+      "bg-teal-500/15 text-teal-600 dark:text-teal-400 border-teal-500/25",
+  },
+  {
     name: "MongoDB",
     color:
       "bg-green-500/15 text-green-600 dark:text-green-400 border-green-500/25",
@@ -289,10 +294,11 @@ export default function Home() {
                   <ScrollArea className="max-h-[calc(85vh-120px)] pr-4">
                     <div className="space-y-6">
                       <Tabs defaultValue="postgresql" className="w-full">
-                        <TabsList className="grid w-full grid-cols-4">
+                        <TabsList className="grid w-full grid-cols-5">
                           <TabsTrigger value="postgresql">
                             PostgreSQL
                           </TabsTrigger>
+                          <TabsTrigger value="mysql">MySQL</TabsTrigger>
                           <TabsTrigger value="mongodb">MongoDB</TabsTrigger>
                           <TabsTrigger value="clickhouse">
                             ClickHouse
@@ -314,6 +320,29 @@ export default function Home() {
                               postgresql://user:pass@db.example.com:5432/production
                             </code>
                           </div>
+                        </TabsContent>
+                        <TabsContent value="mysql" className="space-y-3 mt-3">
+                          <code className="block bg-muted p-3 rounded-md text-xs font-mono break-all">
+                            mysql://username:password@host:port/database
+                          </code>
+                          <div className="space-y-1.5 text-xs font-mono">
+                            <code className="block bg-muted p-2 rounded">
+                              mysql://root:mypass@localhost:3306/mydb
+                            </code>
+                            <code className="block bg-muted p-2 rounded">
+                              mysql://user:pass@db.example.com:3306/production?ssl-mode=REQUIRED
+                            </code>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-2">
+                            The database name is required. MariaDB works with the
+                            same driver — <code className="bg-muted px-1 rounded">mariadb://</code>{' '}
+                            is accepted as an alias. For a server listening only
+                            on its socket, add{' '}
+                            <code className="bg-muted px-1 rounded">
+                              ?socket=/var/run/mysqld/mysqld.sock
+                            </code>
+                            .
+                          </p>
                         </TabsContent>
                         <TabsContent value="mongodb" className="space-y-3 mt-3">
                           <code className="block bg-muted p-3 rounded-md text-xs font-mono break-all">

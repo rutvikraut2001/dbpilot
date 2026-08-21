@@ -1,7 +1,7 @@
 {
   "name": "db-studio",
   "version": "1.0.0",
-  "description": "A modern, open-source database studio for developers. Explore schemas, browse data, and run queries across PostgreSQL, MongoDB, ClickHouse, and Redis.",
+  "description": "A modern, open-source database studio for developers. Explore schemas, browse data, and run queries across PostgreSQL, MySQL, MongoDB, ClickHouse, and Redis.",
   "author": {
     "name": "Rutvik",
     "url": "https://github.com/rutvikraut2001"
@@ -47,6 +47,7 @@
     "lucide-react": "^0.562.0",
     "monaco-editor": "^0.55.1",
     "mongodb": "^7.0.0",
+    "mysql2": "^3.23.4",
     "next": "16.1.1",
     "next-themes": "^0.4.6",
     "pg": "^8.16.3",

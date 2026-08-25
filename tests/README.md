@@ -56,9 +56,10 @@ cannot be overridden.
 
 **`tests/integration/read-only-enforcement.test.ts`** — calls the API route
 handlers directly with hostile requests (client-supplied `readOnly=false`, write
-SQL, multi-statement batches, Redis flush) and asserts both the 403 *and* that
-the adapter method was never reached. Database drivers are mocked; this is about
-whether a write ever gets that far.
+SQL, multi-statement batches, Redis flush, index create/drop) and asserts both
+the 403 *and* that the adapter method was never reached. Database drivers are
+mocked; this is about whether a write ever gets that far. Index *listing* is
+asserted to still succeed — read-only restricts writes, not visibility.
 
 **`tests/integration/postgres-read-only.test.ts`** — the same guarantees against
 a real PostgreSQL, going straight through the adapter so the keyword pre-flight
@@ -67,7 +68,7 @@ functions, `DO` blocks, data-modifying CTEs, and a write as the second statement
 of a batch. Requires `TEST_POSTGRES_URL`.
 
 **`tests/integration/mysql-read-only.test.ts`** — the same guarantees as the
-PostgreSQL suite below, against a real MySQL and through the adapter, so the
+PostgreSQL suite above, against a real MySQL and through the adapter, so the
 keyword pre-flight is bypassed entirely. Covers what no parser can catch: a
 write inside a `CALL`ed stored procedure, DDL, `REPLACE`, `INSERT ... ON
 DUPLICATE KEY UPDATE`, and `GRANT`. Also asserts the pooled connection is
@@ -94,6 +95,27 @@ needs no server: connection strings rejected before a socket is opened (with the
 reason, not a ten-second timeout), the `mariadb://` alias, the dialect that
 decides which read-only enforcement applies, the Unix-socket fallback
 strategies, and credential redaction in error messages.
+
+**`tests/unit/index-health.test.ts`** — the index health rules, which decide
+what the UI suggests *dropping*. The cases that matter are the false positives: a
+partial index must never make a full index look redundant (dropping it would
+leave every non-matching row unindexed), a unique index is never redundant
+because a wider index does not enforce its constraint, and an engine that cannot
+report scan counts must produce no "unused" findings rather than accusing every
+index at once.
+
+**`tests/integration/postgres-indexes.test.ts`** — listing and management against
+a real PostgreSQL. Pins the column-order regression (reading key columns from
+`pg_attribute` returns *table* order, so an index on `(b, a)` read back as
+`(a, b)` — a different index, and one that defeats the prefix analysis), covers
+expression and partial indexes, and asserts that a partial-index predicate
+carrying a second statement is refused with the table still standing. Requires
+`TEST_POSTGRES_URL`.
+
+**`tests/integration/mysql-indexes.test.ts`** — the same contract against MySQL,
+plus where it differs: FULLTEXT/SPATIAL as a CREATE prefix rather than a USING
+clause, no partial indexes (refused rather than silently built full), and
+`PRIMARY` as the primary key's name. Requires `TEST_MYSQL_URL`.
 
 **`tests/unit/cache-keys.test.ts`** — the row-count cache keys: filter keys are
 order-independent (or the cache would miss every request), and a table's

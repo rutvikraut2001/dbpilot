@@ -3,7 +3,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { TableInfo, ColumnInfo, QueryResult } from '../adapters/types';
 
-export type TabType = 'data' | 'schema' | 'query' | 'analytics';
+export type TabType = 'data' | 'schema' | 'query' | 'indexes' | 'analytics';
 
 export interface DataTab {
   id: string;

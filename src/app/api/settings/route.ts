@@ -133,6 +133,7 @@ export async function GET(request: NextRequest) {
       supportsUpdate: true,
       supportsDelete: true,
       supportsTransactions: true,
+      supportsIndexManagement: true,
     };
 
     const access = getWriteAccess(connectionId!);

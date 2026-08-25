@@ -29,6 +29,16 @@ export interface AdapterCapabilities {
   supportsUpdate: boolean;
   supportsDelete: boolean;
   supportsTransactions: boolean;
+  /**
+   * Whether indexes can be created and dropped through the adapter.
+   *
+   * Listing is separate and always available — `getIndexInfo` returns `[]` for
+   * an engine with no indexes to speak of. This flag governs only the write
+   * side, so the UI can show a read-only index list for ClickHouse (whose data
+   * skipping indices are declared with the table, not added later) without
+   * offering a Create button that could only fail.
+   */
+  supportsIndexManagement: boolean;
 }
 
 export interface SSHTunnelConfig {
@@ -161,6 +171,47 @@ export interface IndexInfo {
   isUnique: boolean;
   isPrimary: boolean;
   type: string;
+  /** Bytes on disk. Absent when the engine does not expose it. */
+  sizeBytes?: number;
+  /**
+   * Times the planner has chosen this index since statistics were last reset.
+   *
+   * `0` is a real, meaningful answer — it is what identifies an index nothing
+   * reads — so this must stay `undefined` when the engine cannot tell us,
+   * rather than defaulting to zero and accusing every index of being unused.
+   */
+  scans?: number;
+  /** The engine's own DDL for the index, when it can produce it. */
+  definition?: string;
+  /** Set when the index covers only a subset of rows (a partial index). */
+  isPartial?: boolean;
+}
+
+/** How an index should be built. Shared by every adapter that supports it. */
+export interface CreateIndexOptions {
+  name: string;
+  columns: string[];
+  unique?: boolean;
+  /**
+   * Engine-specific index method — PostgreSQL's `btree`/`hash`/`gin`/`gist`,
+   * MySQL's `BTREE`/`HASH`, MongoDB's `1`/`text`/`hashed`. Validated against a
+   * per-adapter allowlist rather than interpolated as given.
+   */
+  method?: string;
+  /**
+   * Predicate for a partial index. PostgreSQL and MongoDB only; adapters
+   * without support must reject it rather than silently build a full index,
+   * which would quietly cost far more disk than the user asked for.
+   */
+  where?: string;
+  /**
+   * Build without taking a write lock on the table (PostgreSQL `CONCURRENTLY`).
+   *
+   * Cannot run inside a transaction, and a failed concurrent build leaves an
+   * INVALID index behind that must be dropped by hand — so adapters that honour
+   * it must say so, and callers must treat it as the considered choice it is.
+   */
+  concurrent?: boolean;
 }
 
 // The unified database adapter interface
@@ -210,6 +261,23 @@ export interface DatabaseAdapter {
    * offers no way to cancel.
    */
   cancelQuery?(runId: string): Promise<boolean>;
+
+  /**
+   * Create an index. Only defined when `capabilities.supportsIndexManagement`.
+   *
+   * Returns the index as the engine actually stored it — the name may have been
+   * chosen by the server, and the method may have been substituted.
+   */
+  createIndex?(table: string, options: CreateIndexOptions): Promise<IndexInfo>;
+
+  /**
+   * Drop an index. Only defined when `capabilities.supportsIndexManagement`.
+   *
+   * Returns false when no such index existed. Must refuse to drop the primary
+   * key: on most engines that is not an index the user can lose independently
+   * of the constraint it implements.
+   */
+  dropIndex?(table: string, indexName: string): Promise<boolean>;
 
   // Analytics
   getTableStats(table: string): Promise<TableStats>;

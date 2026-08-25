@@ -24,6 +24,11 @@ export class ClickHouseAdapter extends BaseAdapter {
     supportsUpdate: false,
     supportsDelete: false,
     supportsTransactions: false,
+    // ClickHouse's data skipping indices are part of the table definition and
+    // are added with ALTER TABLE ... ADD INDEX followed by a MATERIALIZE
+    // mutation — an asynchronous, table-rewriting operation that does not fit
+    // the create/drop contract. They are listed, not managed.
+    supportsIndexManagement: false,
   };
 
   async connect(): Promise<void> {

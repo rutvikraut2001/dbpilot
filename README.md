@@ -243,6 +243,7 @@ docker compose down && docker compose up -d
 | **Multi-Tab Browsing** | Each table opens as a closeable tab. Switch between tables without losing context. FK clicks open related tables in new tabs. |
 | **Query Tab** | Write and execute SQL (PostgreSQL/MySQL/ClickHouse), MongoDB queries (JSON), or Redis commands. |
 | **Schema Tab** | Available for PostgreSQL, MySQL, MongoDB, and ClickHouse. Shows interactive ER diagram with export. |
+| **Indexes Tab** | Per-table index list with size, usage count and definition. Create an index (ordered columns, unique, method, partial predicate, non-blocking build) or drop one behind a typed confirmation. Flags duplicate, redundant, unused and oversized indexes. |
 | **Redis Cache** | Browse keys grouped by pattern (`user:*`), see type, TTL, memory. Flush individual DB or entire Redis instance. |
 | **Multi-DB Switcher** | Click the connection badge in the header to switch between saved databases instantly. |
 | **Read-Only Toggle** | Enable in the header to block all write operations (enforced server-side). |
@@ -273,10 +274,10 @@ docker compose down && docker compose up -d
 - [x] Smart cell display (JSON, booleans, UUIDs, copy-on-hover)
 - [x] CSV export
 - [x] Dark/light/system theme with aurora design
+- [x] Index management (list, create, drop, health findings)
 - [ ] SQLite support
 - [ ] Saved queries
 - [ ] Query history persistence
-- [ ] Index management UI
 - [ ] Table structure editing
 
 ---

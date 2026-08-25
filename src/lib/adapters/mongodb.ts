@@ -1,4 +1,10 @@
-import { MongoClient, Db, ObjectId, Document } from 'mongodb';
+import {
+  MongoClient,
+  Db,
+  ObjectId,
+  Document,
+  IndexDirection,
+} from 'mongodb';
 import {
   BaseAdapter,
   TableInfo,
@@ -9,13 +15,25 @@ import {
   QueryResult,
   TableStats,
   IndexInfo,
+  CreateIndexOptions,
+  AdapterCapabilities,
   ExecuteQueryOptions,
   QueryDialect,
 } from './types';
 import { isWriteMongoQuery } from '../query-guard';
+import { parseMongoQuery } from '../mongo-query';
 
 export class MongoDBAdapter extends BaseAdapter {
   readonly dialect: QueryDialect = 'mongodb';
+
+  readonly capabilities: AdapterCapabilities = {
+    supportsUpdate: true,
+    supportsDelete: true,
+    // MongoDB has multi-document transactions only on a replica set, which a
+    // standalone development server is not.
+    supportsTransactions: false,
+    supportsIndexManagement: true,
+  };
 
   private client: MongoClient | null = null;
   private db: Db | null = null;
@@ -361,10 +379,12 @@ export class MongoDBAdapter extends BaseAdapter {
 
       // Parse the query - expected format: db.collection.method(args)
       // or just a JSON query for find operations
-      const parsed = this.parseMongoQuery(query);
+      const parsed = parseMongoQuery(query);
 
       if (!parsed) {
-        throw new Error('Invalid query format. Use: db.collectionName.find({}) or similar');
+        throw new Error(
+          'Could not read that as a MongoDB statement. Expected something like db.users.find({}) — the collection name goes directly after db.',
+        );
       }
 
       const { collectionName, operation, args } = parsed;
@@ -437,51 +457,6 @@ export class MongoDBAdapter extends BaseAdapter {
     }
   }
 
-  private parseMongoQuery(query: string): { collectionName: string; operation: string; args: unknown[] } | null {
-    // Match pattern: db.collectionName.operation({...})
-    const match = query.match(/^db\.(\w+)\.(\w+)\(([\s\S]*)\)$/);
-
-    if (!match) {
-      return null;
-    }
-
-    const [, collectionName, operation, argsString] = match;
-
-    try {
-      // Parse arguments - they should be valid JSON objects/arrays
-      const args = argsString.trim() ? this.parseArgs(argsString) : [];
-      return { collectionName, operation, args };
-    } catch {
-      return null;
-    }
-  }
-
-  private parseArgs(argsString: string): unknown[] {
-    // Simple parsing - split by commas that aren't inside brackets
-    const args: unknown[] = [];
-    let depth = 0;
-    let current = '';
-
-    for (const char of argsString) {
-      if (char === '{' || char === '[') depth++;
-      if (char === '}' || char === ']') depth--;
-
-      if (char === ',' && depth === 0) {
-        if (current.trim()) {
-          args.push(JSON.parse(current.trim()));
-        }
-        current = '';
-      } else {
-        current += char;
-      }
-    }
-
-    if (current.trim()) {
-      args.push(JSON.parse(current.trim()));
-    }
-
-    return args;
-  }
 
   async getTableStats(table: string): Promise<TableStats> {
     const db = this.getDb();
@@ -512,15 +487,31 @@ export class MongoDBAdapter extends BaseAdapter {
     const db = this.getDb();
     const collection = db.collection(table);
 
-    const indexes = await collection.indexes();
+    const [indexes, sizes, scans] = await Promise.all([
+      collection.indexes(),
+      this.getIndexSizes(table),
+      this.getIndexScans(table),
+    ]);
 
-    return indexes.map((index) => ({
-      name: index.name || 'unknown',
-      columns: Object.keys(index.key),
-      isUnique: index.unique || false,
-      isPrimary: index.name === '_id_',
-      type: this.getIndexType(index),
-    }));
+    return indexes.map((index) => {
+      const name = index.name || 'unknown';
+      return {
+        name,
+        columns: Object.keys(index.key),
+        isUnique: index.unique || false,
+        isPrimary: name === '_id_',
+        type: this.getIndexType(index),
+        sizeBytes: sizes.get(name),
+        scans: scans.get(name),
+        // A partial index carries a filter; a sparse index is the older
+        // equivalent, skipping documents that lack the field. Both cover a
+        // subset of the collection, which is what the health analysis needs to
+        // know before calling anything redundant.
+        isPartial:
+          index.partialFilterExpression !== undefined || index.sparse === true,
+        definition: this.buildIndexDefinition(table, index),
+      };
+    });
   }
 
   private getIndexType(index: Document): string {
@@ -529,6 +520,179 @@ export class MongoDBAdapter extends BaseAdapter {
     if (keyValues.includes('2d') || keyValues.includes('2dsphere')) return 'geo';
     if (keyValues.includes('hashed')) return 'hashed';
     return 'btree';
+  }
+
+  /**
+   * Bytes per index, from `collStats`.
+   *
+   * Runs as a command rather than the driver's removed `stats()` helper. A view
+   * or a missing collection makes this fail, which leaves sizes undefined rather
+   * than zero — an index of unknown size must not render as an empty one.
+   */
+  private async getIndexSizes(table: string): Promise<Map<string, number>> {
+    const sizes = new Map<string, number>();
+
+    try {
+      const stats = await this.getDb().command({ collStats: table });
+      const indexSizes = stats.indexSizes as Record<string, number> | undefined;
+      for (const [name, bytes] of Object.entries(indexSizes ?? {})) {
+        if (Number.isFinite(bytes)) sizes.set(name, Number(bytes));
+      }
+    } catch {
+      /* collStats unavailable (view, or a restricted role) */
+    }
+
+    return sizes;
+  }
+
+  /**
+   * Operations served per index, from `$indexStats`.
+   *
+   * MongoDB's counterpart to PostgreSQL's `idx_scan`. The counter resets when
+   * the server restarts, so a zero here means "not used since startup" rather
+   * than "never used" — which is why the health analysis words its finding as a
+   * prompt to check rather than a verdict.
+   */
+  private async getIndexScans(table: string): Promise<Map<string, number>> {
+    const scans = new Map<string, number>();
+
+    try {
+      const results = await this.getDb()
+        .collection(table)
+        .aggregate([{ $indexStats: {} }])
+        .toArray();
+
+      for (const entry of results) {
+        const ops = entry.accesses?.ops;
+        if (ops !== undefined && Number.isFinite(Number(ops))) {
+          scans.set(entry.name as string, Number(ops));
+        }
+      }
+    } catch {
+      /* $indexStats needs the indexStats privilege */
+    }
+
+    return scans;
+  }
+
+  /** A shell-style `createIndex` call describing the index, for display. */
+  private buildIndexDefinition(table: string, index: Document): string {
+    const keys = JSON.stringify(index.key);
+    const options: Record<string, unknown> = {};
+    if (index.unique) options.unique = true;
+    if (index.sparse) options.sparse = true;
+    if (index.partialFilterExpression) {
+      options.partialFilterExpression = index.partialFilterExpression;
+    }
+
+    const optionText = Object.keys(options).length
+      ? `, ${JSON.stringify(options)}`
+      : '';
+
+    return `db.${table}.createIndex(${keys}${optionText})`;
+  }
+
+  /**
+   * Index directions and types this adapter will build.
+   *
+   * MongoDB takes the "method" per field as the key's *value* rather than as a
+   * separate clause, so these are the permitted values, not access methods.
+   */
+  private static readonly INDEX_METHODS = [
+    '1',
+    '-1',
+    'text',
+    'hashed',
+    '2d',
+    '2dsphere',
+  ] as const;
+
+  async createIndex(
+    table: string,
+    options: CreateIndexOptions
+  ): Promise<IndexInfo> {
+    const collection = this.getDb().collection(table);
+
+    if (options.columns.length === 0) {
+      throw new Error('An index needs at least one field');
+    }
+
+    const method = (options.method ?? '1').toLowerCase();
+    if (!(MongoDBAdapter.INDEX_METHODS as readonly string[]).includes(method)) {
+      throw new Error(
+        `Unsupported index type: ${options.method}. Expected one of ${MongoDBAdapter.INDEX_METHODS.join(', ')}.`
+      );
+    }
+
+    // Ascending and descending are numbers; every other type is its own string.
+    // IndexDirection covers both, so the key map needs no cast.
+    let direction: IndexDirection;
+    if (method === '1') {
+      direction = 1;
+    } else if (method === '-1') {
+      direction = -1;
+    } else {
+      direction = method as IndexDirection;
+    }
+
+    const keys: Record<string, IndexDirection> = {};
+    for (const column of options.columns) {
+      keys[column] = direction;
+    }
+
+    // `where` is a partialFilterExpression, and MongoDB takes it as a document
+    // rather than a string — so unlike the SQL adapters there is no statement to
+    // smuggle anything into, but it still has to parse as an object.
+    let partialFilterExpression: Document | undefined;
+    if (options.where) {
+      try {
+        const parsed = JSON.parse(options.where);
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+          throw new Error('not an object');
+        }
+        partialFilterExpression = parsed as Document;
+      } catch {
+        throw new Error(
+          'A MongoDB partial index filter must be a JSON object, for example {"status":"active"}'
+        );
+      }
+    }
+
+    await collection.createIndex(keys, {
+      name: options.name,
+      unique: options.unique ?? false,
+      ...(partialFilterExpression ? { partialFilterExpression } : {}),
+    });
+
+    const created = (await this.getIndexInfo(table)).find(
+      (index) => index.name === options.name
+    );
+
+    if (!created) {
+      throw new Error(
+        `Index ${options.name} was created but could not be read back`
+      );
+    }
+
+    return created;
+  }
+
+  async dropIndex(table: string, indexName: string): Promise<boolean> {
+    const collection = this.getDb().collection(table);
+
+    if (indexName === '_id_') {
+      throw new Error(
+        'The _id index is required by MongoDB and cannot be dropped.'
+      );
+    }
+
+    const exists = (await this.getIndexInfo(table)).some(
+      (index) => index.name === indexName
+    );
+    if (!exists) return false;
+
+    await collection.dropIndex(indexName);
+    return true;
   }
 
   async getDatabaseStats(): Promise<{ totalSize: number; tableCount: number; version: string }> {

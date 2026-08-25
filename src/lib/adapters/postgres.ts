@@ -9,13 +9,23 @@ import {
   QueryResult,
   TableStats,
   IndexInfo,
+  CreateIndexOptions,
+  AdapterCapabilities,
   ExecuteQueryOptions,
   QueryDialect,
   BulkDeleteResult,
 } from "./types";
+import { splitSqlStatements } from "../query-guard";
 
 export class PostgresAdapter extends BaseAdapter {
   readonly dialect: QueryDialect = "sql";
+
+  readonly capabilities: AdapterCapabilities = {
+    supportsUpdate: true,
+    supportsDelete: true,
+    supportsTransactions: true,
+    supportsIndexManagement: true,
+  };
 
   private pool: Pool | null = null;
 
@@ -790,41 +800,167 @@ export class PostgresAdapter extends BaseAdapter {
       ? table.split(".")
       : ["public", table];
 
+    // Columns come from pg_get_indexdef per key position, not from a join on
+    // pg_attribute. Two reasons: a join ordered by attnum returns the table's
+    // column order rather than the index's key order — so an index on (b, a)
+    // would be reported as (a, b), which is a different index and would defeat
+    // any prefix-redundancy analysis — and an expression index like
+    // lower(email) has no pg_attribute row to join to at all.
+    //
+    // indnkeyatts excludes INCLUDE'd payload columns, which are stored in the
+    // index but cannot be searched on.
     const query = `
       SELECT
-        i.relname as name,
-        a.attname as column_name,
-        ix.indisunique as is_unique,
-        ix.indisprimary as is_primary,
-        am.amname as type
+        i.relname AS name,
+        ix.indisunique AS is_unique,
+        ix.indisprimary AS is_primary,
+        am.amname AS type,
+        pg_relation_size(i.oid) AS size_bytes,
+        s.idx_scan AS scans,
+        pg_get_indexdef(i.oid) AS definition,
+        ix.indpred IS NOT NULL AS is_partial,
+        (
+          SELECT array_agg(pg_get_indexdef(i.oid, k.ord::int, true) ORDER BY k.ord)
+          FROM unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord)
+          WHERE k.ord <= ix.indnkeyatts
+        ) AS columns
       FROM pg_class t
       JOIN pg_namespace n ON t.relnamespace = n.oid
       JOIN pg_index ix ON t.oid = ix.indrelid
       JOIN pg_class i ON i.oid = ix.indexrelid
       JOIN pg_am am ON i.relam = am.oid
-      JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
+      LEFT JOIN pg_stat_all_indexes s ON s.indexrelid = i.oid
       WHERE t.relname = $1 AND n.nspname = $2
-      ORDER BY i.relname, a.attnum
+      ORDER BY i.relname
     `;
 
     const result = await pool.query(query, [tableName, schema]);
 
-    // Group columns by index name
-    const indexMap = new Map<string, IndexInfo>();
-    for (const row of result.rows) {
-      if (!indexMap.has(row.name)) {
-        indexMap.set(row.name, {
-          name: row.name,
-          columns: [],
-          isUnique: row.is_unique,
-          isPrimary: row.is_primary,
-          type: row.type,
-        });
-      }
-      indexMap.get(row.name)!.columns.push(row.column_name);
+    return result.rows.map((row) => ({
+      name: row.name,
+      columns: (row.columns as string[] | null) ?? [],
+      isUnique: row.is_unique,
+      isPrimary: row.is_primary,
+      type: row.type,
+      sizeBytes: Number(row.size_bytes) || 0,
+      // idx_scan is null when the stats collector has no entry yet; that is
+      // "unknown", not zero, and the health analysis distinguishes the two.
+      scans: row.scans === null ? undefined : Number(row.scans),
+      definition: row.definition ?? undefined,
+      isPartial: row.is_partial ?? false,
+    }));
+  }
+
+  /**
+   * Index access methods this adapter will build.
+   *
+   * An allowlist rather than validation, because the method name goes into the
+   * statement as an identifier and cannot be parameterized.
+   */
+  private static readonly INDEX_METHODS = [
+    "btree",
+    "hash",
+    "gin",
+    "gist",
+    "spgist",
+    "brin",
+  ] as const;
+
+  async createIndex(
+    table: string,
+    options: CreateIndexOptions
+  ): Promise<IndexInfo> {
+    const pool = this.getPool();
+    const quotedTable = this.quoteIdentifier(table);
+
+    this.validateColumnName(options.name);
+
+    if (options.columns.length === 0) {
+      throw new Error("An index needs at least one column");
+    }
+    options.columns.forEach((column) => this.validateColumnName(column));
+
+    const method = (options.method ?? "btree").toLowerCase();
+    if (!(PostgresAdapter.INDEX_METHODS as readonly string[]).includes(method)) {
+      throw new Error(
+        `Unsupported index method: ${options.method}. Expected one of ${PostgresAdapter.INDEX_METHODS.join(", ")}.`
+      );
     }
 
-    return Array.from(indexMap.values());
+    const columnList = options.columns.map((c) => `"${c}"`).join(", ");
+    const statement = [
+      "CREATE",
+      options.unique ? "UNIQUE" : "",
+      "INDEX",
+      options.concurrent ? "CONCURRENTLY" : "",
+      `"${options.name}"`,
+      `ON ${quotedTable}`,
+      `USING ${method}`,
+      `(${columnList})`,
+      options.where ? `WHERE ${options.where}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    // A partial index's predicate is arbitrary SQL that cannot be
+    // parameterized, so it is the one part of this statement built from
+    // uninspected user text. `pool.query` with no bind parameters uses the
+    // simple query protocol, which would happily run
+    // `WHERE true; DROP TABLE users` as a batch — turning "create an index"
+    // into arbitrary DDL that never passes the confirmation gate. Splitting the
+    // assembled statement with the same scanner read-only mode uses (it
+    // understands strings, comments and dollar-quoting, so it cannot be fooled
+    // by `--` or `$$`) and requiring exactly one is what closes that.
+    if (splitSqlStatements(statement).length !== 1) {
+      throw new Error(
+        "Index predicate must be a single expression and cannot contain multiple statements"
+      );
+    }
+
+    // CREATE INDEX CONCURRENTLY cannot run inside a transaction block, so this
+    // deliberately goes through the pool rather than a managed client.
+    await pool.query(statement);
+
+    const created = (await this.getIndexInfo(table)).find(
+      (index) => index.name === options.name
+    );
+
+    if (!created) {
+      // The statement succeeded, so the index exists; only the read-back failed.
+      throw new Error(
+        `Index ${options.name} was created but could not be read back`
+      );
+    }
+
+    return created;
+  }
+
+  async dropIndex(table: string, indexName: string): Promise<boolean> {
+    const pool = this.getPool();
+    this.validateColumnName(indexName);
+
+    // PostgreSQL index names are schema-scoped, not table-scoped, so DROP INDEX
+    // alone would happily drop an index belonging to a different table. Looking
+    // it up against this table first is what keeps the caller's table argument
+    // meaningful rather than decorative.
+    const existing = (await this.getIndexInfo(table)).find(
+      (index) => index.name === indexName
+    );
+
+    if (!existing) return false;
+
+    if (existing.isPrimary) {
+      throw new Error(
+        `${indexName} implements the primary key and cannot be dropped on its own. Drop the constraint instead.`
+      );
+    }
+
+    const [schema] = table.includes(".") ? table.split(".") : ["public"];
+    await pool.query(
+      `DROP INDEX ${this.quoteIdentifier(`${schema}.${indexName}`)}`
+    );
+
+    return true;
   }
 
   async getDatabaseStats(): Promise<{

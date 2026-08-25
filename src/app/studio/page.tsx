@@ -8,6 +8,7 @@ import {
   Table2,
   Code2,
   GitBranch,
+  ListTree,
   LogOut,
   Shield,
   ShieldOff,
@@ -39,6 +40,7 @@ import { TableBrowser } from '@/components/sidebar/table-browser';
 import { DataViewer } from '@/components/data-table/data-viewer';
 import { QueryEditor } from '@/components/query-editor/query-editor';
 import { SchemaViewer } from '@/components/schema-viewer/schema-viewer';
+import { IndexManager } from '@/components/indexes/index-manager';
 import { DatabaseSwitcher } from '@/components/connection/database-switcher';
 import {
   useConnectionStore,
@@ -79,7 +81,10 @@ export default function StudioPage() {
 
   // If Redis connection and schema tab is active, redirect to data tab
   useEffect(() => {
-    if (activeConnection?.type === 'redis' && activeTab === 'schema') {
+    if (
+      activeConnection?.type === 'redis' &&
+      (activeTab === 'schema' || activeTab === 'indexes')
+    ) {
       setActiveTab('data');
     }
   }, [activeConnection, activeTab, setActiveTab]);
@@ -517,6 +522,15 @@ export default function StudioPage() {
                     Schema
                   </TabsTrigger>
                 )}
+                {activeConnection.type !== 'redis' && (
+                  <TabsTrigger
+                    value="indexes"
+                    className="px-4 h-9 data-[state=active]:bg-muted rounded-none border-b-2 border-transparent data-[state=active]:border-primary"
+                  >
+                    <ListTree className="h-4 w-4 mr-2" />
+                    Indexes
+                  </TabsTrigger>
+                )}
               </TabsList>
             </Tabs>
 
@@ -570,6 +584,7 @@ export default function StudioPage() {
             {activeTab === 'data' && <DataViewer />}
             {activeTab === 'query' && <QueryEditor />}
             {activeTab === 'schema' && <SchemaViewer />}
+            {activeTab === 'indexes' && <IndexManager />}
           </div>
         </div>
       </div>

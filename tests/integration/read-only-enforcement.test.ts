@@ -25,6 +25,11 @@ interface FakeAdapter {
   testConnection: ReturnType<typeof vi.fn>;
   flushDb: ReturnType<typeof vi.fn>;
   flushAll: ReturnType<typeof vi.fn>;
+  capabilities: { supportsIndexManagement: boolean };
+  getIndexInfo: ReturnType<typeof vi.fn>;
+  getTableStats: ReturnType<typeof vi.fn>;
+  createIndex: ReturnType<typeof vi.fn>;
+  dropIndex: ReturnType<typeof vi.fn>;
 }
 
 function makeAdapter(dialect: FakeAdapter["dialect"] = "sql"): FakeAdapter {
@@ -47,6 +52,19 @@ function makeAdapter(dialect: FakeAdapter["dialect"] = "sql"): FakeAdapter {
       .mockResolvedValue({ success: true, message: "ok" }),
     flushDb: vi.fn().mockResolvedValue(undefined),
     flushAll: vi.fn().mockResolvedValue(undefined),
+    capabilities: { supportsIndexManagement: true },
+    getIndexInfo: vi.fn().mockResolvedValue([]),
+    getTableStats: vi
+      .fn()
+      .mockResolvedValue({ rowCount: 0, sizeBytes: 0, indexCount: 0 }),
+    createIndex: vi.fn().mockResolvedValue({
+      name: "idx_users_name",
+      columns: ["name"],
+      isUnique: false,
+      isPrimary: false,
+      type: "btree",
+    }),
+    dropIndex: vi.fn().mockResolvedValue(true),
   };
 }
 
@@ -88,8 +106,9 @@ async function loadModules(env: { forceReadOnly?: boolean } = {}) {
   const redis = await import("@/app/api/redis/route");
   const settings = await import("@/app/api/settings/route");
   const connect = await import("@/app/api/connect/route");
+  const indexes = await import("@/app/api/indexes/route");
 
-  return { state, data, query, redis, settings, connect };
+  return { state, data, query, redis, settings, connect, indexes };
 }
 
 function jsonRequest(url: string, method: string, body: unknown): NextRequest {
@@ -346,6 +365,110 @@ describe("connecting cannot grant write access", () => {
     );
 
     expect(state.isReadOnlyMode(CONN)).toBe(false);
+  });
+});
+
+describe("read-only mode blocks index management", () => {
+  it("refuses to create an index", async () => {
+    const { indexes } = await loadModules();
+
+    const response = await indexes.POST(
+      jsonRequest("http://localhost/api/indexes", "POST", {
+        connectionId: CONN,
+        table: "users",
+        name: "idx_users_name",
+        columns: ["name"],
+      })
+    );
+
+    expect(response.status).toBe(403);
+    // Building an index rewrites storage and takes locks; the adapter must not
+    // be reached at all.
+    expect(adapter.createIndex).not.toHaveBeenCalled();
+  });
+
+  it("refuses to drop an index", async () => {
+    const { indexes } = await loadModules();
+
+    const response = await indexes.DELETE(
+      new NextRequest(
+        `http://localhost/api/indexes?connectionId=${CONN}&table=users&name=idx_users_name`,
+        { method: "DELETE" }
+      )
+    );
+
+    expect(response.status).toBe(403);
+    expect(adapter.dropIndex).not.toHaveBeenCalled();
+  });
+
+  it("still allows listing indexes", async () => {
+    // Read-only restricts writes, not visibility — a user browsing a production
+    // database should still be able to see what indexes exist.
+    const { indexes } = await loadModules();
+
+    const response = await indexes.GET(
+      new NextRequest(
+        `http://localhost/api/indexes?connectionId=${CONN}&table=users`
+      )
+    );
+
+    expect(response.status).toBe(200);
+    expect(adapter.getIndexInfo).toHaveBeenCalled();
+  });
+
+  it("allows index writes once write access is granted", async () => {
+    const { state, indexes } = await loadModules();
+    state.setReadOnlyMode(CONN, false);
+
+    const response = await indexes.POST(
+      jsonRequest("http://localhost/api/indexes", "POST", {
+        connectionId: CONN,
+        table: "users",
+        name: "idx_users_name",
+        columns: ["name"],
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(adapter.createIndex).toHaveBeenCalledWith(
+      "users",
+      expect.objectContaining({ name: "idx_users_name", columns: ["name"] })
+    );
+  });
+
+  it("refuses an engine that does not support index management", async () => {
+    const { state, indexes } = await loadModules();
+    state.setReadOnlyMode(CONN, false);
+    adapter.capabilities = { supportsIndexManagement: false };
+
+    const response = await indexes.POST(
+      jsonRequest("http://localhost/api/indexes", "POST", {
+        connectionId: CONN,
+        table: "users",
+        name: "idx_users_name",
+        columns: ["name"],
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(adapter.createIndex).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed index name before reaching the adapter", async () => {
+    const { state, indexes } = await loadModules();
+    state.setReadOnlyMode(CONN, false);
+
+    const response = await indexes.POST(
+      jsonRequest("http://localhost/api/indexes", "POST", {
+        connectionId: CONN,
+        table: "users",
+        name: 'x"; DROP TABLE users; --',
+        columns: ["name"],
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(adapter.createIndex).not.toHaveBeenCalled();
   });
 });
 

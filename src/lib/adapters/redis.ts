@@ -25,6 +25,8 @@ export class RedisAdapter extends BaseAdapter {
     supportsUpdate: true,
     supportsDelete: true,
     supportsTransactions: false,
+    // Redis has no indexes; getIndexInfo returns an empty list.
+    supportsIndexManagement: false,
   };
 
   /**

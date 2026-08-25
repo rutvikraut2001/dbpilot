@@ -9,6 +9,8 @@ import {
   QueryResult,
   TableStats,
   IndexInfo,
+  CreateIndexOptions,
+  AdapterCapabilities,
   ExecuteQueryOptions,
   QueryDialect,
   BulkDeleteResult,
@@ -179,6 +181,13 @@ function toJsonColumnValue(value: unknown): unknown {
 
 export class MySQLAdapter extends BaseAdapter {
   readonly dialect: QueryDialect = "sql";
+
+  readonly capabilities: AdapterCapabilities = {
+    supportsUpdate: true,
+    supportsDelete: true,
+    supportsTransactions: true,
+    supportsIndexManagement: true,
+  };
 
   private pool: Pool | null = null;
 
@@ -1244,20 +1253,11 @@ export class MySQLAdapter extends BaseAdapter {
   async getIndexInfo(table: string): Promise<IndexInfo[]> {
     const { schema, table: name } = this.splitTableName(table);
 
-    const rows = await this.query(
-      `
-      SELECT
-        INDEX_NAME AS name,
-        COLUMN_NAME AS column_name,
-        NON_UNIQUE = 0 AS is_unique,
-        INDEX_TYPE AS type,
-        SEQ_IN_INDEX AS seq
-      FROM information_schema.STATISTICS
-      WHERE TABLE_SCHEMA = COALESCE(?, DATABASE()) AND TABLE_NAME = ?
-      ORDER BY INDEX_NAME, SEQ_IN_INDEX
-      `,
-      [schema || null, name]
-    );
+    const [rows, sizes, scans] = await Promise.all([
+      this.queryIndexKeyParts(schema, name),
+      this.queryIndexSizes(schema, name),
+      this.queryIndexScans(schema, name),
+    ]);
 
     const indexes = new Map<string, IndexInfo>();
     for (const row of rows) {
@@ -1270,12 +1270,280 @@ export class MySQLAdapter extends BaseAdapter {
           // MySQL names the primary key index PRIMARY, with no separate flag.
           isPrimary: indexName === "PRIMARY",
           type: row.type as string,
+          sizeBytes: sizes.get(indexName),
+          scans: scans.get(indexName),
+          // MySQL has no partial indexes: an index always covers every row.
+          isPartial: false,
         });
       }
       indexes.get(indexName)!.columns.push(row.column_name as string);
     }
 
+    // MySQL has no pg_get_indexdef, so the DDL is reconstructed from the key
+    // parts. Built after the columns are collected, not per row.
+    for (const index of indexes.values()) {
+      index.definition = this.buildIndexDefinition(name, index);
+    }
+
     return Array.from(indexes.values());
+  }
+
+  /**
+   * One row per index key part, in key order.
+   *
+   * MySQL 8.0.13+ reports a functional key part with COLUMN_NAME null and the
+   * expression in EXPRESSION. That column does not exist on older MySQL or on
+   * MariaDB, so the richer query is tried first and the portable one is the
+   * fallback — which loses nothing there, because neither has functional
+   * indexes to describe.
+   *
+   * Getting this right matters beyond display: two functional indexes reduced to
+   * the same placeholder would look like identical column lists, and the health
+   * analysis would report one of them as a duplicate of the other.
+   */
+  private async queryIndexKeyParts(
+    schema: string,
+    name: string
+  ): Promise<Row[]> {
+    const select = (columnExpression: string) => `
+      SELECT
+        INDEX_NAME AS name,
+        ${columnExpression} AS column_name,
+        NON_UNIQUE = 0 AS is_unique,
+        INDEX_TYPE AS type,
+        SEQ_IN_INDEX AS seq
+      FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = COALESCE(?, DATABASE()) AND TABLE_NAME = ?
+      ORDER BY INDEX_NAME, SEQ_IN_INDEX
+    `;
+
+    const params = [schema || null, name];
+
+    try {
+      return await this.query(
+        select("COALESCE(COLUMN_NAME, CONCAT('(', EXPRESSION, ')'))"),
+        params
+      );
+    } catch {
+      return await this.query(select("COLUMN_NAME"), params);
+    }
+  }
+
+  /**
+   * Bytes per index, from InnoDB's own page counts.
+   *
+   * Reading `mysql.innodb_index_stats` needs privileges on the `mysql` schema
+   * that a restricted application user will not have, so failure is expected and
+   * leaves the size undefined rather than reporting zero — an index of unknown
+   * size must not be rendered as an empty one.
+   */
+  private async queryIndexSizes(
+    schema: string,
+    name: string
+  ): Promise<Map<string, number>> {
+    const sizes = new Map<string, number>();
+
+    try {
+      const rows = await this.query(
+        `
+        SELECT
+          index_name AS name,
+          SUM(stat_value) * @@innodb_page_size AS size_bytes
+        FROM mysql.innodb_index_stats
+        WHERE database_name = COALESCE(?, DATABASE())
+          AND table_name = ?
+          AND stat_name = 'size'
+        GROUP BY index_name
+        `,
+        [schema || null, name]
+      );
+
+      for (const row of rows) {
+        const bytes = Number(row.size_bytes);
+        if (Number.isFinite(bytes)) sizes.set(row.name as string, bytes);
+      }
+    } catch {
+      /* no privilege on mysql.*, or a non-InnoDB engine */
+    }
+
+    return sizes;
+  }
+
+  /**
+   * Times each index has been read, from the Performance Schema.
+   *
+   * This is MySQL's nearest equivalent to PostgreSQL's `idx_scan`, and the same
+   * source `sys.schema_unused_indexes` is built on. It can be disabled or
+   * unavailable, in which case the count stays undefined — the health analysis
+   * treats "unknown" and "zero" differently, and reporting zero here would
+   * accuse every index of being unused.
+   */
+  private async queryIndexScans(
+    schema: string,
+    name: string
+  ): Promise<Map<string, number>> {
+    const scans = new Map<string, number>();
+
+    try {
+      const rows = await this.query(
+        `
+        SELECT INDEX_NAME AS name, COUNT_STAR AS scans
+        FROM performance_schema.table_io_waits_summary_by_index_usage
+        WHERE OBJECT_SCHEMA = COALESCE(?, DATABASE())
+          AND OBJECT_NAME = ?
+          AND INDEX_NAME IS NOT NULL
+        `,
+        [schema || null, name]
+      );
+
+      for (const row of rows) {
+        const count = Number(row.scans);
+        if (Number.isFinite(count)) scans.set(row.name as string, count);
+      }
+    } catch {
+      /* performance_schema disabled or not readable */
+    }
+
+    return scans;
+  }
+
+  /** Wrap a name in MySQL's identifier quotes. Assumes it is already validated. */
+  private backtick(name: string): string {
+    return "`" + name + "`";
+  }
+
+  /** Reconstruct an index's DDL for display. */
+  private buildIndexDefinition(table: string, index: IndexInfo): string {
+    const columns = index.columns.map((column) =>
+      // A functional key part is already parenthesised and must not be quoted
+      // as if it were a column name.
+      column.startsWith("(") ? column : this.backtick(column)
+    );
+
+    if (index.isPrimary) {
+      return `PRIMARY KEY (${columns.join(", ")})`;
+    }
+
+    const type = index.type.toUpperCase();
+    const prefix =
+      type === "FULLTEXT" || type === "SPATIAL"
+        ? `CREATE ${type} INDEX`
+        : `CREATE ${index.isUnique ? "UNIQUE " : ""}INDEX`;
+    const using =
+      type === "FULLTEXT" || type === "SPATIAL" ? "" : ` USING ${type}`;
+
+    const target = `${this.backtick(index.name)} ON ${this.backtick(table)}`;
+    return `${prefix} ${target} (${columns.join(", ")})${using}`;
+  }
+
+  /**
+   * Index types this adapter will build.
+   *
+   * FULLTEXT and SPATIAL are spelled as a prefix to CREATE rather than a USING
+   * clause, which is why they are handled apart from the access methods below.
+   */
+  private static readonly INDEX_METHODS = [
+    "btree",
+    "hash",
+    "fulltext",
+    "spatial",
+  ] as const;
+
+  async createIndex(
+    table: string,
+    options: CreateIndexOptions
+  ): Promise<IndexInfo> {
+    const pool = this.getPool();
+    const quotedTable = this.quoteIdentifier(table);
+
+    this.validateColumnName(options.name);
+
+    if (options.columns.length === 0) {
+      throw new Error("An index needs at least one column");
+    }
+    options.columns.forEach((column) => this.validateColumnName(column));
+
+    // MySQL has no partial indexes. Building a full index instead would quietly
+    // cost far more disk and write time than was asked for, so this refuses
+    // rather than approximating.
+    if (options.where) {
+      throw new Error(
+        "MySQL does not support partial indexes. Remove the WHERE predicate, or express the condition as a generated column and index that."
+      );
+    }
+
+    const method = (options.method ?? "btree").toLowerCase();
+    if (!(MySQLAdapter.INDEX_METHODS as readonly string[]).includes(method)) {
+      throw new Error(
+        `Unsupported index method: ${options.method}. Expected one of ${MySQLAdapter.INDEX_METHODS.join(", ")}.`
+      );
+    }
+
+    const isSpecialType = method === "fulltext" || method === "spatial";
+    if (isSpecialType && options.unique) {
+      throw new Error(`A ${method.toUpperCase()} index cannot be UNIQUE.`);
+    }
+
+    const columnList = options.columns
+      .map((column) => this.backtick(column))
+      .join(", ");
+
+    const statement = [
+      "CREATE",
+      isSpecialType ? method.toUpperCase() : options.unique ? "UNIQUE" : "",
+      "INDEX",
+      this.backtick(options.name),
+      `ON ${quotedTable}`,
+      `(${columnList})`,
+      isSpecialType ? "" : `USING ${method.toUpperCase()}`,
+      // MySQL's counterpart to PostgreSQL's CONCURRENTLY. Unlike PostgreSQL this
+      // is the server's default for most index builds; asking explicitly makes
+      // it an error rather than a silent table-copy when the storage engine
+      // cannot do it online, which is the useful behaviour for a caller who
+      // specifically asked not to block writes.
+      // Space-separated, not comma-separated: the comma form belongs to ALTER
+      // TABLE, and CREATE INDEX takes these as two independent clauses.
+      options.concurrent ? "ALGORITHM=INPLACE LOCK=NONE" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    await pool.query(statement);
+
+    const created = (await this.getIndexInfo(table)).find(
+      (index) => index.name === options.name
+    );
+
+    if (!created) {
+      throw new Error(
+        `Index ${options.name} was created but could not be read back`
+      );
+    }
+
+    return created;
+  }
+
+  async dropIndex(table: string, indexName: string): Promise<boolean> {
+    const pool = this.getPool();
+    this.validateColumnName(indexName);
+
+    const existing = (await this.getIndexInfo(table)).find(
+      (index) => index.name === indexName
+    );
+
+    if (!existing) return false;
+
+    if (existing.isPrimary) {
+      throw new Error(
+        "PRIMARY implements the primary key and cannot be dropped on its own. Drop the constraint instead."
+      );
+    }
+
+    await pool.query(
+      `DROP INDEX ${this.backtick(indexName)} ON ${this.quoteIdentifier(table)}`
+    );
+
+    return true;
   }
 
   async getDatabaseStats(): Promise<{

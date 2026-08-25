@@ -26,6 +26,50 @@ export const ConnectionIdSchema = z
   .min(1, "Connection ID required")
   .startsWith("conn_", "Invalid connection ID format");
 
+/**
+ * An index name. Same shape as a column name — every engine here accepts a
+ * plain identifier, and the adapters validate again before interpolating.
+ */
+export const IndexNameSchema = z
+  .string()
+  .min(1, "Index name required")
+  .max(128, "Index name too long")
+  .regex(columnNameRegex, "Invalid index name");
+
+/**
+ * A field an index can be built on.
+ *
+ * Deliberately looser than ColumnNameSchema: MongoDB indexes nested fields by
+ * dotted path (`profile.tier`), which is a legitimate field name there and a
+ * malformed identifier in SQL. Being permissive here is safe because it is not
+ * the boundary — each SQL adapter runs its own stricter `validateColumnName`
+ * before the name reaches a statement, and rejects the dotted form.
+ */
+export const IndexFieldSchema = z
+  .string()
+  .min(1, "Field name required")
+  .max(128, "Field name too long")
+  .regex(
+    /^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$/,
+    "Invalid field name"
+  );
+
+export const CreateIndexSchema = z.object({
+  connectionId: ConnectionIdSchema,
+  table: TableNameSchema,
+  name: IndexNameSchema,
+  columns: z
+    .array(IndexFieldSchema)
+    .min(1, "An index needs at least one column")
+    .max(32, "Too many columns for one index"),
+  unique: z.boolean().optional(),
+  // Checked against a per-adapter allowlist, not here: the valid set differs by
+  // engine (PostgreSQL's gin, MySQL's fulltext, MongoDB's hashed).
+  method: z.string().max(32).optional(),
+  where: z.string().max(2000).optional(),
+  concurrent: z.boolean().optional(),
+});
+
 export const QueryOptionsSchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   // Ceiling matches MAX_PAGE_SIZE in the data route.

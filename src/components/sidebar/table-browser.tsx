@@ -6,6 +6,7 @@ import {
   Table2,
   FileText,
   RefreshCw,
+  PanelLeftClose,
   Search,
   ChevronRight,
   Database,
@@ -86,6 +87,7 @@ export function TableBrowser() {
   const setIsLoadingTables = useStudioStore((s) => s.setIsLoadingTables);
   const setError = useStudioStore((s) => s.setError);
   const reset = useStudioStore((s) => s.reset);
+  const setSidebarOpen = useStudioStore((s) => s.setSidebarOpen);
 
   // undefined = not yet known, null = connected to the server with no database
   // chosen. The distinction matters: only the second is worth explaining.
@@ -259,21 +261,13 @@ export function TableBrowser() {
                     variant="ghost"
                     size="icon"
                     className="h-7 w-7"
-                    onClick={fetchTables}
-                    disabled={isLoadingTables}
-                    aria-label={isRedis ? 'Refresh key patterns' : 'Refresh tables'}
+                    onClick={() => setSidebarOpen(false)}
+                    aria-label="Hide sidebar"
                   >
-                    <RefreshCw
-                      className={cn(
-                        'h-4 w-4',
-                        isLoadingTables && 'animate-spin'
-                      )}
-                    />
+                    <PanelLeftClose className="h-4 w-4" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>
-                  {isRedis ? 'Refresh key patterns' : 'Refresh tables'}
-                </TooltipContent>
+                <TooltipContent>Hide sidebar</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           </div>
@@ -287,15 +281,38 @@ export function TableBrowser() {
           />
         </div>
 
-        {/* Search */}
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder={isRedis ? 'Filter key patterns...' : 'Filter tables...'}
-            value={localFilter}
-            onChange={(e) => handleFilterChange(e.target.value)}
-            className="pl-8 h-8 text-sm"
-          />
+        {/* Search, with refresh beside the list it reloads. */}
+        <div className="flex items-center gap-1">
+          <div className="relative flex-1 min-w-0">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder={isRedis ? 'Filter key patterns...' : 'Filter tables...'}
+              value={localFilter}
+              onChange={(e) => handleFilterChange(e.target.value)}
+              className="pl-8 h-8 text-sm"
+            />
+          </div>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0"
+                  onClick={fetchTables}
+                  disabled={isLoadingTables}
+                  aria-label={isRedis ? 'Refresh key patterns' : 'Refresh tables'}
+                >
+                  <RefreshCw
+                    className={cn('h-4 w-4', isLoadingTables && 'animate-spin')}
+                  />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {isRedis ? 'Refresh key patterns' : 'Refresh tables'}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       </div>
 

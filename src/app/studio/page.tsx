@@ -12,7 +12,6 @@ import {
   LogOut,
   Shield,
   ShieldOff,
-  PanelLeftClose,
   PanelLeft,
   Sun,
   Moon,
@@ -492,7 +491,29 @@ export default function StudioPage() {
         {/* Main Panel */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Tab Bar */}
-          <div className="border-b border-border/60 bg-background/60 backdrop-blur-md px-2 flex items-center justify-between shrink-0">
+          <div className="border-b border-border/60 bg-background/60 backdrop-blur-md px-2 flex items-center gap-1 shrink-0">
+            {/* Hiding is done from inside the sidebar's own header. That
+                control goes away with the sidebar, so this is the way back —
+                and it exists only while the sidebar is hidden. */}
+            {!sidebarOpen && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => setSidebarOpen(true)}
+                      aria-label="Show sidebar"
+                    >
+                      <PanelLeft className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Show sidebar</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+
             <Tabs
               value={activeTab}
               onValueChange={(v) => setActiveTab(v as TabType)}
@@ -533,29 +554,6 @@ export default function StudioPage() {
                 )}
               </TabsList>
             </Tabs>
-
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() => setSidebarOpen(!sidebarOpen)}
-                    aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
-                  >
-                    {sidebarOpen ? (
-                      <PanelLeftClose className="h-4 w-4" />
-                    ) : (
-                      <PanelLeft className="h-4 w-4" />
-                    )}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
           </div>
 
           {/* Connection health banner */}

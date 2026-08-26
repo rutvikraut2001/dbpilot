@@ -96,6 +96,25 @@ reason, not a ten-second timeout), the `mariadb://` alias, the dialect that
 decides which read-only enforcement applies, the Unix-socket fallback
 strategies, and credential redaction in error messages.
 
+**`tests/unit/database-name.test.ts`** — database name handling, which is
+deliberately *not* the identifier validation used for tables and columns. A real
+PostgreSQL server used during development held databases called `CR-DB`,
+`next-plugin` and `ugp_bos_2.0`: five of its sixteen would have been unreachable
+had `columnNameRegex` been reused here. Safety comes from quoting instead, so
+most of the suite is about names that must be accepted, plus the doubling escape
+that keeps a name like `x"; DROP DATABASE postgres; --` one identifier rather
+than two statements.
+
+**`tests/integration/postgres-databases.test.ts`** — connecting with no database
+named, then listing, creating and switching. Pins that a failed switch leaves the
+adapter on its previous database rather than with no pool at all, and that the
+table list follows the switch. Requires `TEST_POSTGRES_URL`.
+
+**`tests/integration/mysql-databases.test.ts`** — the same contract where the
+"no database selected" state is genuinely null rather than a driver default, so
+`getTables()` returning an empty list instead of throwing is the behaviour under
+test. Requires `TEST_MYSQL_URL`.
+
 **`tests/unit/index-health.test.ts`** — the index health rules, which decide
 what the UI suggests *dropping*. The cases that matter are the false positives: a
 partial index must never make a full index look redundant (dropping it would

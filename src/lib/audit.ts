@@ -17,6 +17,7 @@ export type AuditAction =
   | "redis.flush"
   | "index.create"
   | "index.drop"
+  | "database.create"
   | "settings.change";
 
 interface AuditEntry {

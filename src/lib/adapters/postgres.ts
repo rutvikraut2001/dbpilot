@@ -9,6 +9,7 @@ import {
   QueryResult,
   TableStats,
   IndexInfo,
+  DatabaseInfo,
   CreateIndexOptions,
   AdapterCapabilities,
   ExecuteQueryOptions,
@@ -16,6 +17,7 @@ import {
   BulkDeleteResult,
 } from "./types";
 import { splitSqlStatements } from "../query-guard";
+import { quoteDoubleQuoted, withDatabase } from "../database-name";
 
 export class PostgresAdapter extends BaseAdapter {
   readonly dialect: QueryDialect = "sql";
@@ -25,7 +27,18 @@ export class PostgresAdapter extends BaseAdapter {
     supportsDelete: true,
     supportsTransactions: true,
     supportsIndexManagement: true,
+    supportsDatabaseCreate: true,
   };
+
+  /**
+   * Database the pool is connected to.
+   *
+   * Read back from the server rather than parsed from the connection string:
+   * `pg` silently defaults a URL with no database to one named after the *user*,
+   * so the string is not a reliable statement of where queries are actually
+   * going. Asking `current_database()` is.
+   */
+  private currentDatabase: string | null = null;
 
   private pool: Pool | null = null;
 
@@ -58,8 +71,10 @@ export class PostgresAdapter extends BaseAdapter {
         client.query("SET statement_timeout = '30000'");
       });
 
-      // Test the connection
+      // Test the connection, and record where it actually landed.
       const client = await this.pool.connect();
+      const resolved = await client.query("SELECT current_database() AS db");
+      this.currentDatabase = resolved.rows[0]?.db ?? null;
       client.release();
       this.connected = true;
     } catch (error) {
@@ -153,6 +168,85 @@ export class PostgresAdapter extends BaseAdapter {
       .split(".")
       .map((part) => `"${part}"`)
       .join(".");
+  }
+
+  getCurrentDatabase(): string | null {
+    return this.currentDatabase;
+  }
+
+  async listDatabases(): Promise<DatabaseInfo[]> {
+    const pool = this.getPool();
+
+    // datallowconn excludes template0, which refuses connections by design, so
+    // offering it would only produce a confusing failure. The templates that do
+    // allow connections are listed but marked as system.
+    const result = await pool.query(`
+      SELECT
+        d.datname AS name,
+        pg_database_size(d.datname) AS size_bytes,
+        d.datistemplate AS is_template
+      FROM pg_database d
+      WHERE d.datallowconn
+      ORDER BY d.datname
+    `);
+
+    return result.rows.map((row) => ({
+      name: row.name,
+      sizeBytes: Number(row.size_bytes) || 0,
+      isCurrent: row.name === this.currentDatabase,
+      isSystem: row.is_template || row.name === "postgres",
+    }));
+  }
+
+  /**
+   * Reconnect the pool against another database.
+   *
+   * PostgreSQL binds a connection to one database for its lifetime — there is no
+   * `USE`, and the protocol offers no way to change it — so switching means
+   * building a new pool and discarding the old one. The old pool is ended only
+   * after the new one connects, so a failed switch leaves the adapter on the
+   * database it was already using rather than on nothing at all.
+   */
+  async useDatabase(name: string): Promise<void> {
+    const target = withDatabase(this.connectionString, name);
+    if (target === this.connectionString && name === this.currentDatabase) {
+      return;
+    }
+
+    const previousPool = this.pool;
+    const previousConnectionString = this.connectionString;
+
+    this.pool = null;
+    this.connectionString = target;
+
+    try {
+      await this.connect();
+    } catch (error) {
+      // Put the working pool back; the caller sees the failure, not a dead
+      // adapter.
+      this.connectionString = previousConnectionString;
+      this.pool = previousPool;
+      this.connected = previousPool !== null;
+      throw error;
+    }
+
+    await previousPool?.end().catch(() => {
+      /* the old pool is being discarded either way */
+    });
+  }
+
+  /**
+   * Create a database.
+   *
+   * `CREATE DATABASE` cannot run inside a transaction block, so this goes
+   * through the pool directly rather than a managed client. The name is quoted
+   * rather than validated against an identifier pattern — real databases are
+   * called things like `CR-DB` and `ugp_bos_2.0`, which no identifier regex
+   * accepts.
+   */
+  async createDatabase(name: string): Promise<void> {
+    const pool = this.getPool();
+    await pool.query(`CREATE DATABASE ${quoteDoubleQuoted(name)}`);
   }
 
   async getTables(): Promise<TableInfo[]> {

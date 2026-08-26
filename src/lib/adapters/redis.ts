@@ -9,6 +9,7 @@ import {
   QueryResult,
   TableStats,
   IndexInfo,
+  DatabaseInfo,
   AdapterCapabilities,
   ExecuteQueryOptions,
   QueryDialect,
@@ -27,6 +28,9 @@ export class RedisAdapter extends BaseAdapter {
     supportsTransactions: false,
     // Redis has no indexes; getIndexInfo returns an empty list.
     supportsIndexManagement: false,
+    // Redis keyspaces are numbered and fixed by server configuration; there is
+    // no CREATE DATABASE to offer.
+    supportsDatabaseCreate: false,
   };
 
   /**
@@ -170,6 +174,67 @@ export class RedisAdapter extends BaseAdapter {
   }
 
   // ── Schema operations ──────────────────────────────────────────────
+
+  getCurrentDatabase(): string | null {
+    return String(this.currentDb);
+  }
+
+  /**
+   * The numbered keyspaces this server exposes.
+   *
+   * Redis databases are not named and cannot be created — a server has a fixed
+   * count, sixteen by default. `CONFIG GET databases` reports it, but CONFIG is
+   * commonly disabled on managed Redis, so failure falls back to the default
+   * rather than showing nothing.
+   *
+   * Key counts come from `INFO keyspace`, which only lists keyspaces that
+   * currently hold keys; the rest are real and simply empty.
+   */
+  async listDatabases(): Promise<DatabaseInfo[]> {
+    const client = this.getClient();
+
+    let count = 16;
+    try {
+      const config = await client.config("GET", "databases");
+      const reported = Number((config as unknown as string[])[1]);
+      if (Number.isFinite(reported) && reported > 0) count = reported;
+    } catch {
+      /* CONFIG disabled — the default is the right guess */
+    }
+
+    const keyCounts = new Map<number, number>();
+    try {
+      const info = await client.info("keyspace");
+      for (const line of info.split(/\r?\n/)) {
+        const match = /^db(\d+):keys=(\d+)/.exec(line);
+        if (match) keyCounts.set(Number(match[1]), Number(match[2]));
+      }
+    } catch {
+      /* keyspace info is a nicety, not a requirement */
+    }
+
+    return Array.from({ length: count }, (_, index) => ({
+      name: String(index),
+      isCurrent: index === this.currentDb,
+      // Every keyspace is equally the user's; none is engine-owned.
+      isSystem: false,
+      objectCount: keyCounts.get(index) ?? 0,
+    }));
+  }
+
+  /** Switch keyspace with SELECT, which Redis applies to the connection. */
+  async useDatabase(name: string): Promise<void> {
+    const index = Number(name);
+    if (!Number.isInteger(index) || index < 0) {
+      throw new Error(
+        `Redis databases are numbered, not named. Expected a number, got "${name}".`
+      );
+    }
+
+    const client = this.getClient();
+    await client.select(index);
+    this.currentDb = index;
+  }
 
   async getTables(): Promise<TableInfo[]> {
     const client = this.getClient();

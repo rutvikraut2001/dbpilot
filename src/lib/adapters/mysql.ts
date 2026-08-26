@@ -9,12 +9,18 @@ import {
   QueryResult,
   TableStats,
   IndexInfo,
+  DatabaseInfo,
   CreateIndexOptions,
   AdapterCapabilities,
   ExecuteQueryOptions,
   QueryDialect,
   BulkDeleteResult,
 } from "./types";
+import {
+  quoteBackticked,
+  withDatabase,
+  databaseFromConnectionString,
+} from "../database-name";
 
 /** Schemas MySQL owns; never surfaced as user tables. */
 const SYSTEM_SCHEMAS = [
@@ -187,6 +193,7 @@ export class MySQLAdapter extends BaseAdapter {
     supportsDelete: true,
     supportsTransactions: true,
     supportsIndexManagement: true,
+    supportsDatabaseCreate: true,
   };
 
   private pool: Pool | null = null;
@@ -196,7 +203,9 @@ export class MySQLAdapter extends BaseAdapter {
    * of PostgreSQL's kind — a "schema" *is* a database — so this stands in for
    * PostgreSQL's `public` when an unqualified table name is resolved.
    */
-  private database: string | null = null;
+  private database: string | null = databaseFromConnectionString(
+    this.connectionString
+  );
 
   /**
    * Pool options derived from the connection string.
@@ -218,7 +227,7 @@ export class MySQLAdapter extends BaseAdapter {
       port,
       user,
       password,
-      database,
+      ...(database ? { database } : {}),
       ...(socketPath ? { socketPath } : {}),
       ...(ssl ? { ssl } : {}),
       waitForConnections: true,
@@ -250,7 +259,7 @@ export class MySQLAdapter extends BaseAdapter {
     port: number;
     user: string;
     password: string;
-    database: string;
+    database: string | null;
     socketPath?: string;
     ssl?: mysql.PoolOptions["ssl"];
   } {
@@ -266,12 +275,10 @@ export class MySQLAdapter extends BaseAdapter {
       );
     }
 
-    const database = decodeURIComponent(url.pathname.replace(/^\//, ""));
-    if (!database) {
-      throw new Error(
-        "MySQL connection string must name a database: mysql://user:password@host:port/database"
-      );
-    }
+    // A connection string with no database is valid: it connects to the server
+    // and leaves the database unselected, which is what lets the user pick one
+    // from the list instead of having to know the name up front.
+    const database = decodeURIComponent(url.pathname.replace(/^\//, "")) || null;
 
     // `?ssl-mode=REQUIRED` / `?sslmode=require` — the common spellings. Only the
     // enable/disable distinction is honoured; certificate material belongs in
@@ -437,6 +444,79 @@ export class MySQLAdapter extends BaseAdapter {
   ): Promise<T[]> {
     const [rows] = await this.getPool().query<Row[]>(sql, params);
     return rows as unknown as T[];
+  }
+
+  getCurrentDatabase(): string | null {
+    return this.database;
+  }
+
+  async listDatabases(): Promise<DatabaseInfo[]> {
+    const placeholders = SYSTEM_SCHEMAS.map(() => "?").join(", ");
+
+    // Sizes come from one grouped scan of TABLES rather than a correlated
+    // subquery per schema, which on a server with many databases is the
+    // difference between one pass and one pass each.
+    const rows = await this.query(
+      `
+      SELECT
+        s.SCHEMA_NAME AS name,
+        COALESCE(t.size_bytes, 0) AS size_bytes,
+        s.SCHEMA_NAME IN (${placeholders}) AS is_system
+      FROM information_schema.SCHEMATA s
+      LEFT JOIN (
+        SELECT
+          TABLE_SCHEMA,
+          SUM(COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0)) AS size_bytes
+        FROM information_schema.TABLES
+        GROUP BY TABLE_SCHEMA
+      ) t ON t.TABLE_SCHEMA = s.SCHEMA_NAME
+      ORDER BY s.SCHEMA_NAME
+      `,
+      [...SYSTEM_SCHEMAS]
+    );
+
+    return rows.map((row) => ({
+      name: row.name as string,
+      sizeBytes: Number(row.size_bytes) || 0,
+      isCurrent: row.name === this.database,
+      isSystem: Boolean(Number(row.is_system)),
+    }));
+  }
+
+  /**
+   * Reconnect the pool against another database.
+   *
+   * `USE db` would only affect whichever pooled connection happened to run it,
+   * leaving the rest of the pool on the old database — so the pool is rebuilt
+   * instead. The previous pool is ended only once the new one is up, so a failed
+   * switch leaves the adapter where it was.
+   */
+  async useDatabase(name: string): Promise<void> {
+    if (name === this.database) return;
+
+    const target = withDatabase(this.connectionString, name);
+    const previousPool = this.pool;
+    const previousConnectionString = this.connectionString;
+
+    this.pool = null;
+    this.connectionString = target;
+
+    try {
+      await this.connect();
+    } catch (error) {
+      this.connectionString = previousConnectionString;
+      this.pool = previousPool;
+      this.database = databaseFromConnectionString(previousConnectionString);
+      this.connected = previousPool !== null;
+      throw error;
+    }
+
+    await previousPool?.end().catch(() => {});
+  }
+
+  async createDatabase(name: string): Promise<void> {
+    const pool = this.getPool();
+    await pool.query(`CREATE DATABASE ${quoteBackticked(name)}`);
   }
 
   async getTables(): Promise<TableInfo[]> {

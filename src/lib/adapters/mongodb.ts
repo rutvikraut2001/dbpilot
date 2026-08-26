@@ -15,6 +15,8 @@ import {
   QueryResult,
   TableStats,
   IndexInfo,
+  DatabaseInfo,
+  CreateDatabaseOptions,
   CreateIndexOptions,
   AdapterCapabilities,
   ExecuteQueryOptions,
@@ -22,6 +24,13 @@ import {
 } from './types';
 import { isWriteMongoQuery } from '../query-guard';
 import { parseMongoQuery } from '../mongo-query';
+import {
+  assertValidMongoDatabaseName,
+  databaseFromConnectionString,
+} from '../database-name';
+
+/** Databases MongoDB owns; hidden from the picker by default. */
+const MONGO_SYSTEM_DATABASES = new Set(['admin', 'local', 'config']);
 
 export class MongoDBAdapter extends BaseAdapter {
   readonly dialect: QueryDialect = 'mongodb';
@@ -33,6 +42,7 @@ export class MongoDBAdapter extends BaseAdapter {
     // standalone development server is not.
     supportsTransactions: false,
     supportsIndexManagement: true,
+    supportsDatabaseCreate: true,
   };
 
   private client: MongoClient | null = null;
@@ -54,9 +64,10 @@ export class MongoDBAdapter extends BaseAdapter {
       });
       await this.client.connect();
 
-      // Extract database name from connection string or use default
+      // No database in the URL is a legitimate state: connected to the server
+      // with nothing selected, which is what the picker is for.
       const dbName = this.extractDatabaseName();
-      this.db = this.client.db(dbName);
+      this.db = dbName ? this.client.db(dbName) : null;
       this.connected = true;
     } catch (error) {
       this.connected = false;
@@ -64,11 +75,15 @@ export class MongoDBAdapter extends BaseAdapter {
     }
   }
 
-  private extractDatabaseName(): string {
-    // Try to extract database name from connection string
-    const url = new URL(this.connectionString);
-    const dbName = url.pathname.slice(1); // Remove leading slash
-    return dbName || 'test';
+  /**
+   * The database named by the connection string, or null when it names none.
+   *
+   * Previously defaulted to `'test'`, which meant a URL with no database
+   * connected successfully to a database the user had never heard of and showed
+   * an empty collection list with no explanation.
+   */
+  private extractDatabaseName(): string | null {
+    return databaseFromConnectionString(this.connectionString);
   }
 
   async disconnect(): Promise<void> {
@@ -124,7 +139,79 @@ export class MongoDBAdapter extends BaseAdapter {
     return this.db;
   }
 
+  getCurrentDatabase(): string | null {
+    return this.db?.databaseName ?? null;
+  }
+
+  async listDatabases(): Promise<DatabaseInfo[]> {
+    if (!this.client) {
+      throw new Error('Database not connected. Call connect() first.');
+    }
+
+    const result = await this.client.db().admin().listDatabases();
+    const current = this.getCurrentDatabase();
+
+    return result.databases
+      .map((entry) => ({
+        name: entry.name as string,
+        sizeBytes: Number(entry.sizeOnDisk) || 0,
+        isCurrent: entry.name === current,
+        isSystem: MONGO_SYSTEM_DATABASES.has(entry.name as string),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Switch database in place.
+   *
+   * Unlike the SQL adapters there is nothing to rebuild: a MongoClient holds a
+   * connection pool to the *server*, and `client.db(name)` is just a handle. No
+   * reconnection, so no failure path either — an unknown name simply yields a
+   * database with no collections, which is also how MongoDB reports one that
+   * does not exist yet.
+   */
+  async useDatabase(name: string): Promise<void> {
+    if (!this.client) {
+      throw new Error('Database not connected. Call connect() first.');
+    }
+
+    assertValidMongoDatabaseName(name);
+    this.db = this.client.db(name);
+  }
+
+  /**
+   * Create a database.
+   *
+   * MongoDB has no CREATE DATABASE. A database starts existing when the first
+   * document or collection is written into it, so creating one means creating a
+   * collection — without that the name would disappear again on the next
+   * refresh, which is worse than refusing.
+   */
+  async createDatabase(
+    name: string,
+    options?: CreateDatabaseOptions
+  ): Promise<void> {
+    if (!this.client) {
+      throw new Error('Database not connected. Call connect() first.');
+    }
+
+    assertValidMongoDatabaseName(name);
+
+    const collection = options?.initialCollection?.trim();
+    if (!collection) {
+      throw new Error(
+        'MongoDB creates a database when its first collection is added, so a collection name is required.'
+      );
+    }
+
+    await this.client.db(name).createCollection(collection);
+  }
+
   async getTables(): Promise<TableInfo[]> {
+    // Nothing selected yet — the caller shows the database picker rather than an
+    // unexplained empty list.
+    if (!this.db) return [];
+
     const db = this.getDb();
 
     const collections = await db.listCollections().toArray();

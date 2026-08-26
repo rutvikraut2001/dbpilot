@@ -54,6 +54,33 @@ export const IndexFieldSchema = z
     "Invalid field name"
   );
 
+/**
+ * A database name.
+ *
+ * Far looser than ColumnNameSchema on purpose: real databases are called
+ * `CR-DB`, `next-plugin`, `ugp_bos_2.0`, and an identifier pattern would make
+ * them unreachable. What makes this safe is quoting at the adapter, not
+ * restriction here — see `src/lib/database-name.ts`.
+ */
+export const DatabaseNameSchema = z
+  .string()
+  .min(1, "Database name required")
+  .max(64, "Database name too long")
+  .refine((value) => value === value.trim(), "Database name cannot start or end with a space")
+  .refine((value) => !/[\u0000-\u001F\u007F]/.test(value), "Database name cannot contain control characters");
+
+export const CreateDatabaseSchema = z.object({
+  connectionId: ConnectionIdSchema,
+  name: DatabaseNameSchema,
+  // MongoDB only: a database exists once it holds a collection.
+  initialCollection: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[a-zA-Z_][a-zA-Z0-9_.-]*$/, "Invalid collection name")
+    .optional(),
+});
+
 export const CreateIndexSchema = z.object({
   connectionId: ConnectionIdSchema,
   table: TableNameSchema,

@@ -109,9 +109,10 @@ mysql://user:pass@db.example.com:3306/prod?ssl-mode=REQUIRED
 mysql://root:mypass@localhost/mydb?socket=/var/run/mysqld/mysqld.sock
 mariadb://user:pass@localhost:3306/mydb
 ```
-The database name is required — MySQL has no schema/table split to fall back on,
-so an unqualified table name is resolved against it. `mariadb://` is accepted as
-an alias for the same protocol.
+The database name is optional. Leave it off to connect to the *server* and choose
+a database from the sidebar picker — useful when you do not know the name, or
+want to browse several. `mariadb://` is accepted as an alias for the same
+protocol.
 
 ### MongoDB
 ```
@@ -243,6 +244,7 @@ docker compose down && docker compose up -d
 | **Multi-Tab Browsing** | Each table opens as a closeable tab. Switch between tables without losing context. FK clicks open related tables in new tabs. |
 | **Query Tab** | Write and execute SQL (PostgreSQL/MySQL/ClickHouse), MongoDB queries (JSON), or Redis commands. |
 | **Schema Tab** | Available for PostgreSQL, MySQL, MongoDB, and ClickHouse. Shows interactive ER diagram with export. |
+| **Database Picker** | The sidebar shows which database on the server you are reading from. Connect without naming one and pick it here, switch between databases without reconnecting, or create a new one. Databases the engine owns are hidden behind "Show system". |
 | **Indexes Tab** | Per-table index list with size, usage count and definition. Create an index (ordered columns, unique, method, partial predicate, non-blocking build) or drop one behind a typed confirmation. Flags duplicate, redundant, unused and oversized indexes. |
 | **Redis Cache** | Browse keys grouped by pattern (`user:*`), see type, TTL, memory. Flush individual DB or entire Redis instance. |
 | **Multi-DB Switcher** | Click the connection badge in the header to switch between saved databases instantly. |
@@ -275,6 +277,7 @@ docker compose down && docker compose up -d
 - [x] CSV export
 - [x] Dark/light/system theme with aurora design
 - [x] Index management (list, create, drop, health findings)
+- [x] Database picker (connect without a database, switch, create)
 - [ ] SQLite support
 - [ ] Saved queries
 - [ ] Query history persistence

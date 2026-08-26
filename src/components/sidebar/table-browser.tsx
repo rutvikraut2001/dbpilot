@@ -63,6 +63,7 @@ import { useStudioStore, useFilteredTables } from '@/lib/stores/studio';
 import { useActiveConnection, useReadOnlyMode } from '@/lib/stores/connection';
 import { cn, formatBytes } from '@/lib/utils';
 import { apiFetch, errorMessage } from '@/lib/utils/api-client';
+import { DatabasePicker } from './database-picker';
 import { TABLE_DRAG_MIME } from '@/lib/constants';
 import { TableInfo } from '@/lib/adapters/types';
 
@@ -84,6 +85,13 @@ export function TableBrowser() {
   const isLoadingTables = useStudioStore((s) => s.isLoadingTables);
   const setIsLoadingTables = useStudioStore((s) => s.setIsLoadingTables);
   const setError = useStudioStore((s) => s.setError);
+  const reset = useStudioStore((s) => s.reset);
+
+  // undefined = not yet known, null = connected to the server with no database
+  // chosen. The distinction matters: only the second is worth explaining.
+  const [currentDatabase, setCurrentDatabase] = useState<string | null | undefined>(
+    undefined
+  );
   const error = useStudioStore((s) => s.error);
 
   const [flushDialogOpen, setFlushDialogOpen] = useState(false);
@@ -147,6 +155,19 @@ export function TableBrowser() {
   const handleTableSelect = (tableName: string) => {
     openTableTab(tableName);
   };
+
+  /**
+   * Rebuild the workspace after the connection moves to another database.
+   *
+   * Open tabs name tables in the database we just left, and those names need not
+   * exist in the new one — leaving them would show tabs that error on click. The
+   * table list is refetched rather than trusted, since the server has already
+   * dropped its cache for this connection.
+   */
+  const handleDatabaseChanged = useCallback(() => {
+    reset();
+    void fetchTables();
+  }, [reset, fetchTables]);
 
   const handleShowDiagram = (tableName: string) => {
     setSchemaFocusTable(tableName);
@@ -258,6 +279,14 @@ export function TableBrowser() {
           </div>
         </div>
 
+        {/* Which database on this server the connection is reading from. */}
+        <div className="mb-2">
+          <DatabasePicker
+            onDatabaseChanged={handleDatabaseChanged}
+            onCurrentChanged={setCurrentDatabase}
+          />
+        </div>
+
         {/* Search */}
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -292,6 +321,17 @@ export function TableBrowser() {
                 <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
                 Retry
               </Button>
+            </div>
+          ) : currentDatabase === null && !tableFilter ? (
+            // Connected to the server, but pointed at no database. Saying "no
+            // tables found" here describes the symptom and hides the cause.
+            <div className="flex flex-col items-center gap-2 px-2 py-8 text-center">
+              <Database className="h-5 w-5 text-muted-foreground" />
+              <p className="text-sm font-medium">No database selected</p>
+              <p className="text-xs text-muted-foreground">
+                Your connection string does not name one. Pick a database above
+                to see its tables.
+              </p>
             </div>
           ) : filteredTables.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground text-sm">

@@ -28,24 +28,41 @@ describe("MySQL connection strings", () => {
     );
   });
 
-  it("requires a database name", async () => {
-    const adapter = new MySQLAdapter("mysql://root:secret@localhost:3306");
+  // Port 1 has nothing listening, so these fail at the socket immediately. What
+  // is being asserted is which *kind* of failure happens: a parse error means
+  // the string was rejected before any connection was attempted, so anything
+  // else proves the string parsed.
+  const UNREACHABLE = "127.0.0.1:1";
 
-    await expect(adapter.connect()).rejects.toThrow(/must name a database/);
-  });
+  it.each([
+    ["no database and no trailing slash", `mysql://root:secret@${UNREACHABLE}`],
+    ["no database with a trailing slash", `mysql://root:secret@${UNREACHABLE}/`],
+  ])("accepts a connection string with %s", async (_label, url) => {
+    // This used to be rejected outright, which is precisely what prevented a
+    // user from connecting to the server and then choosing a database. Not
+    // naming one is now a valid state: connected, with nothing selected.
+    const adapter = new MySQLAdapter(url);
 
-  it("requires a database name even with a trailing slash", async () => {
-    const adapter = new MySQLAdapter("mysql://root:secret@localhost:3306/");
-
-    await expect(adapter.connect()).rejects.toThrow(/must name a database/);
+    await expect(adapter.connect()).rejects.not.toThrow(
+      /Invalid MySQL connection string/
+    );
+    expect(adapter.getCurrentDatabase()).toBeNull();
   });
 
   it("accepts mariadb:// as an alias for the same protocol", async () => {
-    // Reaching the database-name complaint proves the scheme itself was
-    // accepted; had it not been, the URL error would have come first.
-    const adapter = new MySQLAdapter("mariadb://root:secret@localhost:3306");
+    // A scheme the adapter did not recognise would fail the URL parse before
+    // reaching the socket, so a non-parse failure proves the alias was taken.
+    const adapter = new MySQLAdapter(`mariadb://root:secret@${UNREACHABLE}/db`);
 
-    await expect(adapter.connect()).rejects.toThrow(/must name a database/);
+    await expect(adapter.connect()).rejects.not.toThrow(
+      /Invalid MySQL connection string/
+    );
+  });
+
+  it("reports the database named by the connection string", () => {
+    expect(
+      new MySQLAdapter("mysql://root@localhost:3306/appdb").getCurrentDatabase()
+    ).toBe("appdb");
   });
 
   it("reports the SQL dialect, so read-only mode enforces at the engine", () => {

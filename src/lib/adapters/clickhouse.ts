@@ -9,10 +9,23 @@ import {
   QueryResult,
   TableStats,
   IndexInfo,
+  DatabaseInfo,
   AdapterCapabilities,
   ExecuteQueryOptions,
   QueryDialect,
 } from "./types";
+import {
+  quoteBackticked,
+  withDatabase,
+  databaseFromConnectionString,
+} from "../database-name";
+
+/** Databases ClickHouse owns; hidden from the picker by default. */
+const CLICKHOUSE_SYSTEM_DATABASES = new Set([
+  "system",
+  "information_schema",
+  "INFORMATION_SCHEMA",
+]);
 
 export class ClickHouseAdapter extends BaseAdapter {
   readonly dialect: QueryDialect = "sql";
@@ -29,7 +42,12 @@ export class ClickHouseAdapter extends BaseAdapter {
     // mutation — an asynchronous, table-rewriting operation that does not fit
     // the create/drop contract. They are listed, not managed.
     supportsIndexManagement: false,
+    // Unlike its index model, CREATE DATABASE is ordinary DDL here.
+    supportsDatabaseCreate: true,
   };
+
+  /** Database the client is bound to; ClickHouse always resolves one. */
+  private currentDatabase: string | null = null;
 
   async connect(): Promise<void> {
     const { url, username, password, database } =
@@ -55,6 +73,7 @@ export class ClickHouseAdapter extends BaseAdapter {
 
     // Test connection
     await this.client.ping();
+    this.currentDatabase = database;
     this.connected = true;
   }
 
@@ -156,6 +175,80 @@ export class ClickHouseAdapter extends BaseAdapter {
       .split(".")
       .map((part) => `\`${part}\``)
       .join(".");
+  }
+
+  getCurrentDatabase(): string | null {
+    return this.currentDatabase;
+  }
+
+  async listDatabases(): Promise<DatabaseInfo[]> {
+    const client = this.getClient();
+
+    const result = await client.query({
+      query: `
+        SELECT
+          d.name AS name,
+          COALESCE(p.size_bytes, 0) AS size_bytes
+        FROM system.databases d
+        LEFT JOIN (
+          SELECT database, sum(bytes_on_disk) AS size_bytes
+          FROM system.parts
+          WHERE active
+          GROUP BY database
+        ) p ON p.database = d.name
+        ORDER BY d.name
+      `,
+      format: "JSONEachRow",
+    });
+
+    const rows = (await result.json()) as {
+      name: string;
+      size_bytes: string | number;
+    }[];
+
+    return rows.map((row) => ({
+      name: row.name,
+      sizeBytes: Number(row.size_bytes) || 0,
+      isCurrent: row.name === this.currentDatabase,
+      isSystem: CLICKHOUSE_SYSTEM_DATABASES.has(row.name),
+    }));
+  }
+
+  /**
+   * Rebuild the client against another database.
+   *
+   * The database is fixed when the client is created, so switching means a new
+   * client. The old one is closed only after the new one answers a ping, leaving
+   * the adapter on its previous database if the switch fails.
+   */
+  async useDatabase(name: string): Promise<void> {
+    if (name === this.currentDatabase) return;
+
+    const previousClient = this.client;
+    const previousConnectionString = this.connectionString;
+
+    this.client = null;
+    this.connectionString = withDatabase(this.connectionString, name);
+
+    try {
+      await this.connect();
+    } catch (error) {
+      this.connectionString = previousConnectionString;
+      this.client = previousClient;
+      this.currentDatabase =
+        databaseFromConnectionString(previousConnectionString) ?? "default";
+      this.connected = previousClient !== null;
+      throw error;
+    }
+
+    await previousClient?.close().catch(() => {});
+  }
+
+  async createDatabase(name: string): Promise<void> {
+    const client = this.getClient();
+    await client.command({
+      query: `CREATE DATABASE ${quoteBackticked(name)}`,
+    });
   }
 
   async getTables(): Promise<TableInfo[]> {

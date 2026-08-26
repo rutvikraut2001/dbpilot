@@ -25,7 +25,14 @@ interface FakeAdapter {
   testConnection: ReturnType<typeof vi.fn>;
   flushDb: ReturnType<typeof vi.fn>;
   flushAll: ReturnType<typeof vi.fn>;
-  capabilities: { supportsIndexManagement: boolean };
+  capabilities: {
+    supportsIndexManagement: boolean;
+    supportsDatabaseCreate: boolean;
+  };
+  listDatabases: ReturnType<typeof vi.fn>;
+  getCurrentDatabase: ReturnType<typeof vi.fn>;
+  useDatabase: ReturnType<typeof vi.fn>;
+  createDatabase: ReturnType<typeof vi.fn>;
   getIndexInfo: ReturnType<typeof vi.fn>;
   getTableStats: ReturnType<typeof vi.fn>;
   createIndex: ReturnType<typeof vi.fn>;
@@ -52,7 +59,14 @@ function makeAdapter(dialect: FakeAdapter["dialect"] = "sql"): FakeAdapter {
       .mockResolvedValue({ success: true, message: "ok" }),
     flushDb: vi.fn().mockResolvedValue(undefined),
     flushAll: vi.fn().mockResolvedValue(undefined),
-    capabilities: { supportsIndexManagement: true },
+    capabilities: {
+      supportsIndexManagement: true,
+      supportsDatabaseCreate: true,
+    },
+    listDatabases: vi.fn().mockResolvedValue([]),
+    getCurrentDatabase: vi.fn().mockReturnValue("appdb"),
+    useDatabase: vi.fn().mockResolvedValue(undefined),
+    createDatabase: vi.fn().mockResolvedValue(undefined),
     getIndexInfo: vi.fn().mockResolvedValue([]),
     getTableStats: vi
       .fn()
@@ -107,8 +121,9 @@ async function loadModules(env: { forceReadOnly?: boolean } = {}) {
   const settings = await import("@/app/api/settings/route");
   const connect = await import("@/app/api/connect/route");
   const indexes = await import("@/app/api/indexes/route");
+  const databases = await import("@/app/api/databases/route");
 
-  return { state, data, query, redis, settings, connect, indexes };
+  return { state, data, query, redis, settings, connect, indexes, databases };
 }
 
 function jsonRequest(url: string, method: string, body: unknown): NextRequest {
@@ -439,7 +454,10 @@ describe("read-only mode blocks index management", () => {
   it("refuses an engine that does not support index management", async () => {
     const { state, indexes } = await loadModules();
     state.setReadOnlyMode(CONN, false);
-    adapter.capabilities = { supportsIndexManagement: false };
+    adapter.capabilities = {
+      supportsIndexManagement: false,
+      supportsDatabaseCreate: true,
+    };
 
     const response = await indexes.POST(
       jsonRequest("http://localhost/api/indexes", "POST", {
@@ -469,6 +487,99 @@ describe("read-only mode blocks index management", () => {
 
     expect(response.status).toBe(400);
     expect(adapter.createIndex).not.toHaveBeenCalled();
+  });
+});
+
+describe("read-only mode blocks creating a database", () => {
+  it("refuses to create a database", async () => {
+    const { databases } = await loadModules();
+
+    const response = await databases.POST(
+      jsonRequest("http://localhost/api/databases", "POST", {
+        connectionId: CONN,
+        name: "new_db",
+      })
+    );
+
+    expect(response.status).toBe(403);
+    expect(adapter.createDatabase).not.toHaveBeenCalled();
+  });
+
+  it("still allows listing databases", async () => {
+    // Read-only restricts writes, not visibility. Someone browsing a production
+    // server should still be able to see and move between its databases.
+    const { databases } = await loadModules();
+
+    const response = await databases.GET(
+      new NextRequest(`http://localhost/api/databases?connectionId=${CONN}`)
+    );
+
+    expect(response.status).toBe(200);
+    expect(adapter.listDatabases).toHaveBeenCalled();
+  });
+
+  it("still allows switching database", async () => {
+    // Switching changes what you are looking at, not what is stored.
+    const { databases } = await loadModules();
+
+    const response = await databases.PUT(
+      jsonRequest("http://localhost/api/databases", "PUT", {
+        connectionId: CONN,
+        name: "other_db",
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(adapter.useDatabase).toHaveBeenCalledWith("other_db");
+  });
+
+  it("allows creating once write access is granted", async () => {
+    const { state, databases } = await loadModules();
+    state.setReadOnlyMode(CONN, false);
+
+    const response = await databases.POST(
+      jsonRequest("http://localhost/api/databases", "POST", {
+        connectionId: CONN,
+        name: "new_db",
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(adapter.createDatabase).toHaveBeenCalledWith(
+      "new_db",
+      expect.anything()
+    );
+  });
+
+  it("refuses an engine that cannot create databases", async () => {
+    const { state, databases } = await loadModules();
+    state.setReadOnlyMode(CONN, false);
+    adapter.capabilities.supportsDatabaseCreate = false;
+
+    const response = await databases.POST(
+      jsonRequest("http://localhost/api/databases", "POST", {
+        connectionId: CONN,
+        name: "new_db",
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(adapter.createDatabase).not.toHaveBeenCalled();
+  });
+
+  it("rejects a name with control characters before reaching the adapter", async () => {
+    const { state, databases } = await loadModules();
+    state.setReadOnlyMode(CONN, false);
+
+    const response = await databases.POST(
+      jsonRequest("http://localhost/api/databases", "POST", {
+        connectionId: CONN,
+        name: "bad\tname",
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(adapter.createDatabase).not.toHaveBeenCalled();
   });
 });
 

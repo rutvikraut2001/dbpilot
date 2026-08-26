@@ -39,6 +39,55 @@ export interface AdapterCapabilities {
    * offering a Create button that could only fail.
    */
   supportsIndexManagement: boolean;
+  /**
+   * Whether a new database can be created through the adapter.
+   *
+   * Listing and switching are separate and always available. Redis has a fixed
+   * set of numbered keyspaces created by server configuration, so it can offer
+   * them for selection without offering a Create button that could only fail.
+   */
+  supportsDatabaseCreate: boolean;
+}
+
+/**
+ * A database on the connected server.
+ *
+ * "Database" here is the level *above* tables — a PostgreSQL or MySQL database,
+ * a MongoDB database, a ClickHouse database, a numbered Redis keyspace. It is
+ * deliberately not PostgreSQL's `schema`, which sits between the two.
+ */
+export interface DatabaseInfo {
+  name: string;
+  /** Bytes on disk, when the engine reports it. */
+  sizeBytes?: number;
+  /**
+   * Tables, collections or keys held, when the engine reports it cheaply.
+   *
+   * Redis has no size in bytes per keyspace but does know the key count, which
+   * is the number that tells a user which of sixteen numbered databases they
+   * actually want.
+   */
+  objectCount?: number;
+  /** The database this connection is currently reading from. */
+  isCurrent: boolean;
+  /**
+   * Owned by the engine rather than the user — `template1`,
+   * `information_schema`, MongoDB's `admin`. Hidden by default in the picker,
+   * since selecting one is rarely what someone means to do.
+   */
+  isSystem: boolean;
+}
+
+/** Options for creating a database, where an engine needs more than a name. */
+export interface CreateDatabaseOptions {
+  /**
+   * First collection to create, for MongoDB.
+   *
+   * MongoDB has no CREATE DATABASE: a database begins to exist when something is
+   * written into it, so creating one without a collection would produce a name
+   * that disappears again on refresh. Required there, ignored elsewhere.
+   */
+  initialCollection?: string;
 }
 
 export interface SSHTunnelConfig {
@@ -230,6 +279,37 @@ export interface DatabaseAdapter {
   // Lightweight health check using existing connection (no new connections)
   ping(): Promise<boolean>;
 
+  /**
+   * Databases visible to these credentials.
+   *
+   * Available on every adapter: connecting without naming a database is
+   * legitimate, and this is what lets the user pick one afterwards rather than
+   * being dropped into whichever database the driver happened to default to.
+   */
+  listDatabases(): Promise<DatabaseInfo[]>;
+
+  /**
+   * The database currently in use, or null when none has been selected.
+   *
+   * Null is a real state, not an error. A connection string with no database
+   * leaves the adapter connected to the *server* with nothing chosen, and the UI
+   * shows the picker rather than an empty, unexplained table list.
+   */
+  getCurrentDatabase(): string | null;
+
+  /**
+   * Point this connection at a different database.
+   *
+   * PostgreSQL, MySQL and ClickHouse cannot change database on an open
+   * connection, so those adapters rebuild their pool; MongoDB and Redis switch
+   * in place. Either way the caller must treat cached schema and open table tabs
+   * as invalid afterwards — they name tables that need not exist in the new one.
+   */
+  useDatabase(name: string): Promise<void>;
+
+  /** Create a database. Only defined when `capabilities.supportsDatabaseCreate`. */
+  createDatabase?(name: string, options?: CreateDatabaseOptions): Promise<void>;
+
   // Schema operations
   getTables(): Promise<TableInfo[]>;
   getTableSchema(tableName: string): Promise<ColumnInfo[]>;
@@ -309,6 +389,9 @@ export abstract class BaseAdapter implements DatabaseAdapter {
     return this.connected;
   }
 
+  abstract listDatabases(): Promise<DatabaseInfo[]>;
+  abstract getCurrentDatabase(): string | null;
+  abstract useDatabase(name: string): Promise<void>;
   abstract getTables(): Promise<TableInfo[]>;
   abstract getTableSchema(tableName: string): Promise<ColumnInfo[]>;
   abstract getRelationships(): Promise<Relationship[]>;

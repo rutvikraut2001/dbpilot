@@ -493,6 +493,78 @@ export class PostgresAdapter extends BaseAdapter {
     }));
   }
 
+  /**
+   * Key columns for a table, read from pg_catalog.
+   *
+   * Not from information_schema, because the obvious join there is wrong:
+   * matching `key_column_usage` to `constraint_column_usage` on constraint name
+   * alone pairs *every* local column with *every* referenced column. A composite
+   * foreign key on (a, b) produces four rows instead of two — so each column
+   * came back twice, and half the pairings named the wrong target. `unnest ...
+   * WITH ORDINALITY` on both sides, joined on the ordinal, is what pairs
+   * position 1 with position 1.
+   *
+   * Returned as maps keyed by column, so a column belonging to two constraints
+   * still yields one entry rather than duplicating the column.
+   */
+  private async getKeyColumns(
+    schema: string,
+    table: string
+  ): Promise<{
+    primaryKeys: Set<string>;
+    foreignKeys: Map<string, { table: string; column: string }>;
+  }> {
+    const pool = this.getPool();
+
+    const result = await pool.query(
+      `
+      SELECT
+        con.contype AS kind,
+        att.attname AS column_name,
+        ref_class.relname AS foreign_table,
+        ref_att.attname AS foreign_column
+      FROM pg_constraint con
+      JOIN pg_class cl ON cl.oid = con.conrelid
+      JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+      CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS local_key(attnum, ord)
+      JOIN pg_attribute att
+        ON att.attrelid = con.conrelid AND att.attnum = local_key.attnum
+      -- Only foreign keys have a referenced side; the ordinal join is what keeps
+      -- each local column paired with its own target.
+      LEFT JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS ref_key(attnum, ord)
+        ON con.contype = 'f' AND ref_key.ord = local_key.ord
+      LEFT JOIN pg_class ref_class ON ref_class.oid = con.confrelid
+      LEFT JOIN pg_attribute ref_att
+        ON ref_att.attrelid = con.confrelid AND ref_att.attnum = ref_key.attnum
+      WHERE con.contype IN ('p', 'f')
+        AND ns.nspname = $1
+        AND cl.relname = $2
+      ORDER BY con.conname, local_key.ord
+      `,
+      [schema, table]
+    );
+
+    const primaryKeys = new Set<string>();
+    const foreignKeys = new Map<string, { table: string; column: string }>();
+
+    for (const row of result.rows) {
+      if (row.kind === "p") {
+        primaryKeys.add(row.column_name);
+        continue;
+      }
+      // A column in two foreign keys keeps the first; the column list has room
+      // for one reference, and inventing a second row would duplicate it.
+      if (row.foreign_table && !foreignKeys.has(row.column_name)) {
+        foreignKeys.set(row.column_name, {
+          table: row.foreign_table,
+          column: row.foreign_column,
+        });
+      }
+    }
+
+    return { primaryKeys, foreignKeys };
+  }
+
   async getTableSchema(tableName: string): Promise<ColumnInfo[]> {
     const pool = this.getPool();
 
@@ -501,47 +573,26 @@ export class PostgresAdapter extends BaseAdapter {
       ? tableName.split(".")
       : ["public", tableName];
 
-    const query = `
-      SELECT
-        c.column_name as name,
-        c.data_type as type,
-        c.udt_name as udt_name,
-        c.is_nullable = 'YES' as nullable,
-        c.column_default as default_value,
-        COALESCE(pk.is_primary, false) as is_primary_key,
-        COALESCE(fk.is_foreign, false) as is_foreign_key,
-        fk.foreign_table,
-        fk.foreign_column
-      FROM information_schema.columns c
-      LEFT JOIN (
-        SELECT kcu.column_name, true as is_primary
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu
-          ON tc.constraint_name = kcu.constraint_name
-        WHERE tc.constraint_type = 'PRIMARY KEY'
-          AND tc.table_schema = $1
-          AND tc.table_name = $2
-      ) pk ON c.column_name = pk.column_name
-      LEFT JOIN (
+    // One row per column, guaranteed: the constraint lookup is a separate query
+    // whose results are keyed by column name rather than a join that can
+    // multiply rows.
+    const [result, keys] = await Promise.all([
+      pool.query(
+        `
         SELECT
-          kcu.column_name,
-          true as is_foreign,
-          ccu.table_name as foreign_table,
-          ccu.column_name as foreign_column
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu
-          ON tc.constraint_name = kcu.constraint_name
-        JOIN information_schema.constraint_column_usage ccu
-          ON tc.constraint_name = ccu.constraint_name
-        WHERE tc.constraint_type = 'FOREIGN KEY'
-          AND tc.table_schema = $1
-          AND tc.table_name = $2
-      ) fk ON c.column_name = fk.column_name
-      WHERE c.table_schema = $1 AND c.table_name = $2
-      ORDER BY c.ordinal_position
-    `;
-
-    const result = await pool.query(query, [schema, table]);
+          c.column_name as name,
+          c.data_type as type,
+          c.udt_name as udt_name,
+          c.is_nullable = 'YES' as nullable,
+          c.column_default as default_value
+        FROM information_schema.columns c
+        WHERE c.table_schema = $1 AND c.table_name = $2
+        ORDER BY c.ordinal_position
+        `,
+        [schema, table]
+      ),
+      this.getKeyColumns(schema, table),
+    ]);
 
     // Fetch enum values for USER-DEFINED columns (PostgreSQL enums)
     const udtNames = result.rows
@@ -565,39 +616,50 @@ export class PostgresAdapter extends BaseAdapter {
       }
     }
 
-    return result.rows.map((row) => ({
-      name: row.name,
-      type: row.type === 'USER-DEFINED' ? row.udt_name : row.type,
-      nullable: row.nullable,
-      isPrimaryKey: row.is_primary_key,
-      isForeignKey: row.is_foreign_key,
-      defaultValue: row.default_value || undefined,
-      foreignKeyRef: row.foreign_table
-        ? {
-            table: row.foreign_table,
-            column: row.foreign_column,
-          }
-        : undefined,
-      enumValues: enumMap[row.udt_name] || undefined,
-    }));
+    return result.rows.map((row) => {
+      const foreignKeyRef = keys.foreignKeys.get(row.name);
+
+      return {
+        name: row.name,
+        type: row.type === 'USER-DEFINED' ? row.udt_name : row.type,
+        nullable: row.nullable,
+        isPrimaryKey: keys.primaryKeys.has(row.name),
+        isForeignKey: foreignKeyRef !== undefined,
+        defaultValue: row.default_value || undefined,
+        foreignKeyRef,
+        enumValues: enumMap[row.udt_name] || undefined,
+      };
+    });
   }
 
   async getRelationships(): Promise<Relationship[]> {
     const pool = this.getPool();
 
+    // Same correction as getKeyColumns: joining key_column_usage to
+    // constraint_column_usage on constraint name pairs every local column with
+    // every referenced one, so a composite foreign key on (a, b) drew four edges
+    // — two of them between columns that are not related at all. Matching the
+    // ordinal is what makes each edge the real relationship.
     const query = `
       SELECT
-        tc.table_name as source_table,
-        kcu.column_name as source_column,
-        ccu.table_name as target_table,
-        ccu.column_name as target_column
-      FROM information_schema.table_constraints tc
-      JOIN information_schema.key_column_usage kcu
-        ON tc.constraint_name = kcu.constraint_name
-      JOIN information_schema.constraint_column_usage ccu
-        ON tc.constraint_name = ccu.constraint_name
-      WHERE tc.constraint_type = 'FOREIGN KEY'
-        AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
+        cl.relname AS source_table,
+        att.attname AS source_column,
+        ref_class.relname AS target_table,
+        ref_att.attname AS target_column
+      FROM pg_constraint con
+      JOIN pg_class cl ON cl.oid = con.conrelid
+      JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+      CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS local_key(attnum, ord)
+      JOIN pg_attribute att
+        ON att.attrelid = con.conrelid AND att.attnum = local_key.attnum
+      CROSS JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS ref_key(attnum, ord)
+      JOIN pg_attribute ref_att
+        ON ref_att.attrelid = con.confrelid AND ref_att.attnum = ref_key.attnum
+      JOIN pg_class ref_class ON ref_class.oid = con.confrelid
+      WHERE con.contype = 'f'
+        AND ref_key.ord = local_key.ord
+        AND ns.nspname NOT IN ('pg_catalog', 'information_schema')
+      ORDER BY cl.relname, con.conname, local_key.ord
     `;
 
     const result = await pool.query(query);

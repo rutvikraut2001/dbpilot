@@ -115,6 +115,14 @@ table list follows the switch. Requires `TEST_POSTGRES_URL`.
 `getTables()` returning an empty list instead of throwing is the behaviour under
 test. Requires `TEST_MYSQL_URL`.
 
+**`tests/integration/postgres-schema.test.ts`** — composite keys. Joining
+`key_column_usage` to `constraint_column_usage` on constraint name alone pairs
+every local column of a foreign key with every referenced column, so a composite
+key on (a, b) returned each column twice *and* named the wrong target for half
+the pairs. It showed up as React reporting duplicate keys in the ER diagram; the
+real damage was the diagram drawing relationships that do not exist. Requires
+`TEST_POSTGRES_URL`.
+
 **`tests/integration/postgres-schema-edit.test.ts`** — altering a table's
 columns. The property that matters is transactional DDL: an edit whose third
 statement fails must leave the table exactly as it was, which is what makes

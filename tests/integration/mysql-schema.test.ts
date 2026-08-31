@@ -195,6 +195,57 @@ describe.skipIf(!CONNECTION_STRING)("MySQL schema and CRUD", () => {
     });
   });
 
+  describe("columns belonging to more than one foreign key", () => {
+    beforeAll(async () => {
+      await adapter.executeQuery("DROP TABLE IF EXISTS multi_fk_child");
+      await adapter.executeQuery("DROP TABLE IF EXISTS multi_fk_other");
+      await adapter.executeQuery(
+        "CREATE TABLE multi_fk_other (owner_id int PRIMARY KEY)"
+      );
+      await adapter.executeQuery(`
+        CREATE TABLE multi_fk_child (
+          id int AUTO_INCREMENT PRIMARY KEY,
+          owner_id int,
+          KEY k_owner (owner_id),
+          CONSTRAINT fk_to_owners FOREIGN KEY (owner_id)
+            REFERENCES schema_owners (id),
+          CONSTRAINT fk_to_other FOREIGN KEY (owner_id)
+            REFERENCES multi_fk_other (owner_id)
+        )
+      `);
+    });
+
+    afterAll(async () => {
+      await adapter.executeQuery("DROP TABLE IF EXISTS multi_fk_child");
+      await adapter.executeQuery("DROP TABLE IF EXISTS multi_fk_other");
+    });
+
+    it("returns the column once, not once per constraint", async () => {
+      // Joining KEY_COLUMN_USAGE into the column query duplicated the column
+      // here, which handed React two list items with the same key and drew the
+      // column twice in the ER diagram.
+      const names = (await adapter.getTableSchema("multi_fk_child")).map(
+        (c) => c.name
+      );
+
+      expect(names).toEqual(["id", "owner_id"]);
+      expect(new Set(names).size).toBe(names.length);
+    });
+
+    it("still reports both relationships", async () => {
+      // Two constraints are two real relationships; only the column list is
+      // deduplicated.
+      const relationships = (await adapter.getRelationships()).filter(
+        (r) => r.sourceTable === "multi_fk_child"
+      );
+
+      expect(relationships.map((r) => r.targetTable).sort()).toEqual([
+        "multi_fk_other",
+        "schema_owners",
+      ]);
+    });
+  });
+
   describe("getRelationships", () => {
     it("reports the foreign key between the two tables", async () => {
       const relationships = await adapter.getRelationships();

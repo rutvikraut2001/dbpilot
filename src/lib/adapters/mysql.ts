@@ -766,32 +766,75 @@ export class MySQLAdapter extends BaseAdapter {
     }));
   }
 
-  async getTableSchema(tableName: string): Promise<ColumnInfo[]> {
-    const { schema, table } = this.splitTableName(tableName);
-
+  /**
+   * Foreign key targets for a table, keyed by local column.
+   *
+   * A column can belong to more than one foreign key, and the column list has
+   * room for exactly one reference — so the first is kept rather than the column
+   * being emitted twice. Unlike PostgreSQL, MySQL already pairs each local
+   * column with its own referenced column in KEY_COLUMN_USAGE, so no ordinal
+   * matching is needed here.
+   */
+  private async getForeignKeyColumns(
+    schema: string,
+    table: string
+  ): Promise<Map<string, { table: string; column: string }>> {
     const rows = await this.query(
       `
       SELECT
-        c.COLUMN_NAME AS name,
-        c.DATA_TYPE AS type,
-        c.COLUMN_TYPE AS column_type,
-        c.IS_NULLABLE = 'YES' AS nullable,
-        c.COLUMN_DEFAULT AS default_value,
-        c.EXTRA AS extra,
-        c.COLUMN_KEY = 'PRI' AS is_primary_key,
-        fk.REFERENCED_TABLE_NAME AS foreign_table,
-        fk.REFERENCED_COLUMN_NAME AS foreign_column
-      FROM information_schema.COLUMNS c
-      LEFT JOIN information_schema.KEY_COLUMN_USAGE fk
-        ON fk.TABLE_SCHEMA = c.TABLE_SCHEMA
-        AND fk.TABLE_NAME = c.TABLE_NAME
-        AND fk.COLUMN_NAME = c.COLUMN_NAME
-        AND fk.REFERENCED_TABLE_NAME IS NOT NULL
-      WHERE c.TABLE_SCHEMA = COALESCE(?, DATABASE()) AND c.TABLE_NAME = ?
-      ORDER BY c.ORDINAL_POSITION
+        COLUMN_NAME AS name,
+        REFERENCED_TABLE_NAME AS foreign_table,
+        REFERENCED_COLUMN_NAME AS foreign_column
+      FROM information_schema.KEY_COLUMN_USAGE
+      WHERE TABLE_SCHEMA = COALESCE(?, DATABASE())
+        AND TABLE_NAME = ?
+        AND REFERENCED_TABLE_NAME IS NOT NULL
+      ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION
       `,
       [schema || null, table]
     );
+
+    const foreignKeys = new Map<string, { table: string; column: string }>();
+
+    for (const row of rows) {
+      const name = row.name as string;
+      if (!foreignKeys.has(name)) {
+        foreignKeys.set(name, {
+          table: row.foreign_table as string,
+          column: row.foreign_column as string,
+        });
+      }
+    }
+
+    return foreignKeys;
+  }
+
+  async getTableSchema(tableName: string): Promise<ColumnInfo[]> {
+    const { schema, table } = this.splitTableName(tableName);
+
+    // The foreign keys are read separately and keyed by column rather than
+    // joined in. Joining duplicates the *column* when it belongs to more than
+    // one foreign key — legal in MySQL, and enough to hand React two list items
+    // with the same key and show the column twice in the diagram.
+    const [rows, foreignKeys] = await Promise.all([
+      this.query(
+        `
+        SELECT
+          c.COLUMN_NAME AS name,
+          c.DATA_TYPE AS type,
+          c.COLUMN_TYPE AS column_type,
+          c.IS_NULLABLE = 'YES' AS nullable,
+          c.COLUMN_DEFAULT AS default_value,
+          c.EXTRA AS extra,
+          c.COLUMN_KEY = 'PRI' AS is_primary_key
+        FROM information_schema.COLUMNS c
+        WHERE c.TABLE_SCHEMA = COALESCE(?, DATABASE()) AND c.TABLE_NAME = ?
+        ORDER BY c.ORDINAL_POSITION
+        `,
+        [schema || null, table]
+      ),
+      this.getForeignKeyColumns(schema, table),
+    ]);
 
     return rows.map((row) => {
       const columnType = (row.column_type as string) ?? "";
@@ -805,7 +848,7 @@ export class MySQLAdapter extends BaseAdapter {
         type: columnType || (row.type as string),
         nullable: Boolean(Number(row.nullable)),
         isPrimaryKey: Boolean(Number(row.is_primary_key)),
-        isForeignKey: Boolean(row.foreign_table),
+        isForeignKey: foreignKeys.has(row.name as string),
         defaultValue:
           defaultValue ??
           // AUTO_INCREMENT is a default in every sense the editor cares about,
@@ -813,12 +856,7 @@ export class MySQLAdapter extends BaseAdapter {
           (String(row.extra ?? "").includes("auto_increment")
             ? "auto_increment"
             : undefined),
-        foreignKeyRef: row.foreign_table
-          ? {
-              table: row.foreign_table as string,
-              column: row.foreign_column as string,
-            }
-          : undefined,
+        foreignKeyRef: foreignKeys.get(row.name as string),
         enumValues: parseEnumMembers(columnType),
       };
     });

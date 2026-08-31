@@ -78,6 +78,7 @@ Open [http://localhost:3000](http://localhost:3000).
 ### Query & Schema
 - **Query Editor** — Monaco-powered editor with syntax highlighting for SQL, MongoDB queries, and Redis commands
 - **Schema Visualization** — interactive ER diagrams with PK/FK relationships, auto-layout, and export
+- **Read Cardinality** — edges labelled `1:1`, `1:N` or `N:M` from the catalogue, with optional (nullable) keys drawn dashed and junction tables collapsed into a single many-to-many
 - **Redis Cache Browser** — scan keys by pattern, view type badges, TTL countdown, memory usage per key
 - **Flush Operations** — Flush DB or Flush All directly from the Redis sidebar/toolbar (with confirmation)
 
@@ -243,7 +244,7 @@ docker compose down && docker compose up -d
 | **Data Tab** | Click a table/key pattern in the sidebar to open it as a tab. Double-click any cell to edit that field. Use the pencil icon for full row editing. |
 | **Multi-Tab Browsing** | Each table opens as a closeable tab. Switch between tables without losing context. FK clicks open related tables in new tabs. |
 | **Query Tab** | Write and execute SQL (PostgreSQL/MySQL/ClickHouse), MongoDB queries (JSON), or Redis commands. |
-| **Schema Tab** | Available for PostgreSQL, MySQL, MongoDB, and ClickHouse. Shows interactive ER diagram with export. |
+| **Schema Tab** | Available for PostgreSQL, MySQL, MongoDB, and ClickHouse. Shows an interactive ER diagram. Each edge carries its real cardinality — `1:1` where the foreign key is backed by a unique index, `1:N` otherwise, `N:M` where a pure junction table joins two others — and is dashed when the key is nullable, so an optional relationship is visible at a glance. Export as PNG, SVG or PDF. |
 | **Database Picker** | The sidebar shows which database on the server you are reading from. Connect without naming one and pick it here, switch between databases without reconnecting, or create a new one. Databases the engine owns are hidden behind "Show system". |
 | **Structure Tab** | Add, rename, retype and drop columns. Changes are staged, then shown as the exact SQL that will run — with the engine's own caveats (a type change rewrites the table; MySQL cannot roll a multi-step edit back). Destructive edits need `APPLY` typed. PostgreSQL and MySQL only. |
 | **Indexes Tab** | Per-table index list with size, usage count and definition. Create an index (ordered columns, unique, method, partial predicate, non-blocking build) or drop one behind a typed confirmation. Flags duplicate, redundant, unused and oversized indexes. |
@@ -283,6 +284,7 @@ docker compose down && docker compose up -d
 - [x] Saved queries
 - [x] Query history persistence
 - [x] Query cancellation (aborts the statement on the server)
+- [x] ER diagram cardinality (1:1 / 1:N / N:M, optional keys, junction tables) + PDF export
 - [ ] SQLite support
 
 ---

@@ -19,6 +19,10 @@ import {
   BulkDeleteResult,
 } from "./types";
 import {
+  junctionCandidates,
+  markJunctionTables,
+} from "../relationships";
+import {
   quoteBackticked,
   withDatabase,
   databaseFromConnectionString,
@@ -864,27 +868,147 @@ export class MySQLAdapter extends BaseAdapter {
 
 
   async getRelationships(): Promise<Relationship[]> {
+    // Uniqueness and nullability are what turn a foreign key into a cardinality:
+    // a foreign key is one-to-many unless its own columns are unique, and
+    // optional when they are nullable. Both were previously ignored, so the
+    // diagram labelled every relationship 1:N whether or not that was true.
+    const [rows, uniqueColumnSets, nullableColumns] = await Promise.all([
+      this.query(
+        `
+        SELECT
+          TABLE_NAME AS source_table,
+          COLUMN_NAME AS source_column,
+          REFERENCED_TABLE_NAME AS target_table,
+          REFERENCED_COLUMN_NAME AS target_column,
+          CONSTRAINT_NAME AS constraint_name,
+          ORDINAL_POSITION AS ordinal
+        FROM information_schema.KEY_COLUMN_USAGE
+        WHERE TABLE_SCHEMA = COALESCE(?, DATABASE())
+          AND REFERENCED_TABLE_NAME IS NOT NULL
+        ORDER BY TABLE_NAME, CONSTRAINT_NAME, ORDINAL_POSITION
+        `,
+        [this.database]
+      ),
+      this.getUniqueColumnSets(),
+      this.getNullableColumns(),
+    ]);
+
+    // Grouped by constraint so a composite foreign key is judged on its whole
+    // column set: (a, b) is one-to-one only if (a, b) together are unique, not
+    // if either column happens to be.
+    const columnsByConstraint = new Map<string, string[]>();
+    for (const row of rows) {
+      const key = `${row.source_table as string}.${row.constraint_name as string}`;
+      const existing = columnsByConstraint.get(key);
+      if (existing) existing.push(row.source_column as string);
+      else columnsByConstraint.set(key, [row.source_column as string]);
+    }
+
+    const relationships: Relationship[] = rows.map((row) => {
+      const table = row.source_table as string;
+      const constraintKey = `${table}.${row.constraint_name as string}`;
+      const columns = columnsByConstraint.get(constraintKey) ?? [];
+      const signature = `${table}.${[...columns].sort((a, b) => a.localeCompare(b)).join(",")}`;
+
+      return {
+        sourceTable: table,
+        sourceColumn: row.source_column as string,
+        targetTable: row.target_table as string,
+        targetColumn: row.target_column as string,
+        type: uniqueColumnSets.has(signature)
+          ? ("one-to-one" as const)
+          : ("one-to-many" as const),
+        optional: nullableColumns.has(`${table}.${row.source_column as string}`),
+      };
+    });
+
+    const candidates = junctionCandidates(relationships);
+    if (candidates.length === 0) return relationships;
+
+    const columnsByTable = await this.getColumnNames(candidates);
+    return markJunctionTables(relationships, columnsByTable);
+  }
+
+  /**
+   * Signatures (`table.col1,col2` with columns sorted) of every unique index.
+   *
+   * A foreign key is one-to-one when its own column set carries a unique index —
+   * that constraint is what stops a second child row pointing at the same
+   * parent. Sorting makes the comparison order-independent, since an index on
+   * (a, b) constrains the same pairs as the foreign key (b, a).
+   */
+  private async getUniqueColumnSets(): Promise<Set<string>> {
     const rows = await this.query(
       `
-      SELECT
-        TABLE_NAME AS source_table,
-        COLUMN_NAME AS source_column,
-        REFERENCED_TABLE_NAME AS target_table,
-        REFERENCED_COLUMN_NAME AS target_column
-      FROM information_schema.KEY_COLUMN_USAGE
-      WHERE TABLE_SCHEMA = COALESCE(?, DATABASE())
-        AND REFERENCED_TABLE_NAME IS NOT NULL
+      SELECT TABLE_NAME AS table_name, INDEX_NAME AS index_name,
+             COLUMN_NAME AS column_name
+      FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = COALESCE(?, DATABASE()) AND NON_UNIQUE = 0
+      ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX
       `,
       [this.database]
     );
 
-    return rows.map((row) => ({
-      sourceTable: row.source_table as string,
-      sourceColumn: row.source_column as string,
-      targetTable: row.target_table as string,
-      targetColumn: row.target_column as string,
-      type: "one-to-many" as const,
-    }));
+    const byIndex = new Map<string, { table: string; columns: string[] }>();
+    for (const row of rows) {
+      const table = row.table_name as string;
+      const key = `${table}.${row.index_name as string}`;
+      const entry = byIndex.get(key) ?? { table, columns: [] };
+      entry.columns.push(row.column_name as string);
+      byIndex.set(key, entry);
+    }
+
+    return new Set(
+      [...byIndex.values()].map(
+        (entry) =>
+          `${entry.table}.${[...entry.columns].sort((a, b) => a.localeCompare(b)).join(",")}`
+      )
+    );
+  }
+
+  /** `table.column` for every nullable column, so optionality can be read off. */
+  private async getNullableColumns(): Promise<Set<string>> {
+    const rows = await this.query(
+      `
+      SELECT TABLE_NAME AS table_name, COLUMN_NAME AS column_name
+      FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = COALESCE(?, DATABASE()) AND IS_NULLABLE = 'YES'
+      `,
+      [this.database]
+    );
+
+    return new Set(
+      rows.map((row) => `${row.table_name as string}.${row.column_name as string}`)
+    );
+  }
+
+  /** Column names for the named tables, for junction-table detection. */
+  private async getColumnNames(
+    tables: string[]
+  ): Promise<Map<string, string[]>> {
+    if (tables.length === 0) return new Map();
+
+    const placeholders = tables.map(() => "?").join(", ");
+    const rows = await this.query(
+      `
+      SELECT TABLE_NAME AS table_name, COLUMN_NAME AS column_name
+      FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = COALESCE(?, DATABASE())
+        AND TABLE_NAME IN (${placeholders})
+      ORDER BY TABLE_NAME, ORDINAL_POSITION
+      `,
+      [this.database, ...tables]
+    );
+
+    const columnsByTable = new Map<string, string[]>();
+    for (const row of rows) {
+      const table = row.table_name as string;
+      const existing = columnsByTable.get(table);
+      if (existing) existing.push(row.column_name as string);
+      else columnsByTable.set(table, [row.column_name as string]);
+    }
+
+    return columnsByTable;
   }
 
   async getRows(table: string, options: QueryOptions): Promise<PaginatedResult> {

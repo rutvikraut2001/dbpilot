@@ -210,7 +210,33 @@ export interface Relationship {
   sourceColumn: string;
   targetTable: string;
   targetColumn: string;
+  /**
+   * Cardinality, read from the schema rather than assumed.
+   *
+   * A foreign key is one-to-many by default, but one-to-one when the
+   * referencing column set is itself unique — the constraint that stops a second
+   * child row pointing at the same parent. Both adapters previously returned
+   * `one-to-many` unconditionally, so the diagram labelled every edge `1:N`
+   * whether or not that was true.
+   */
   type: 'one-to-one' | 'one-to-many' | 'many-to-many';
+  /**
+   * Whether the child row may exist without a parent.
+   *
+   * True when the referencing column is nullable. This is the second axis of
+   * crow's-foot notation — zero-or-one versus exactly-one — and is what
+   * separates an optional association from a required one.
+   */
+  optional?: boolean;
+  /**
+   * Set when this relationship passes through a junction table: a table whose
+   * primary key is made up entirely of foreign keys to exactly two other tables
+   * and which carries no other meaning of its own.
+   *
+   * The relationship is still stored as the two real foreign keys; this only
+   * marks them as the two halves of a many-to-many so the diagram can say so.
+   */
+  viaJunctionTable?: string;
 }
 
 export interface QueryOptions {

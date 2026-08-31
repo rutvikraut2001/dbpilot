@@ -81,7 +81,10 @@ MySQL differs from PostgreSQL, which is where this adapter can be wrong while
 still looking right: enum members parsed out of `COLUMN_TYPE` (there is no
 catalogue to join), insert and update reading the row back because there is no
 `RETURNING`, `tinyint(1)` receiving the grid's string `"false"`, and a bigint key
-arriving as text rather than a rounded number. Requires `TEST_MYSQL_URL`.
+arriving as text rather than a rounded number. Its cardinality block mirrors the
+PostgreSQL one assertion for assertion — MySQL reads uniqueness from
+`STATISTICS` rather than `pg_index`, so the two engines agreeing is the property
+under test. Requires `TEST_MYSQL_URL`.
 
 **`tests/integration/mysql-performance.test.ts`** — the same paging, bulk-delete
 and estimation contract as the PostgreSQL suite, so both adapters are held to one
@@ -120,8 +123,18 @@ test. Requires `TEST_MYSQL_URL`.
 every local column of a foreign key with every referenced column, so a composite
 key on (a, b) returned each column twice *and* named the wrong target for half
 the pairs. It showed up as React reporting duplicate keys in the ER diagram; the
-real damage was the diagram drawing relationships that do not exist. Requires
+real damage was the diagram drawing relationships that do not exist. Also covers
+cardinality: a foreign key backed by a unique index reads as one-to-one, one
+without reads as one-to-many, and a nullable key is marked optional. Requires
 `TEST_POSTGRES_URL`.
+
+**`tests/unit/relationships.test.ts`** — junction-table detection, the one part
+of cardinality derived from the relationship set rather than the catalogue, so
+PostgreSQL and MySQL cannot disagree about it. The rule is deliberately narrow
+and the tests are mostly about what it must *not* collapse: a join table that has
+grown a column of its own (`role`, `created_at`) is an entity and stays two
+one-to-many edges, and so does one that something else references. Collapsing
+either would hide data the user has.
 
 **`tests/integration/postgres-schema-edit.test.ts`** — altering a table's
 columns. The property that matters is transactional DDL: an edit whose third

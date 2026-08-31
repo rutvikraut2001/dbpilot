@@ -251,6 +251,19 @@ export function SchemaViewer() {
   );
 }
 
+/**
+ * The badge shown on an edge and in the Overview list.
+ *
+ * Shared rather than inlined at both call sites: they had already drifted, the
+ * diagram saying `N:M` while the list beside it still said `N:N` for the same
+ * relationship.
+ */
+function cardinalityLabel(type: Relationship['type']): string {
+  if (type === 'one-to-one') return '1:1';
+  if (type === 'many-to-many') return 'N:M';
+  return '1:N';
+}
+
 function SchemaViewerInner() {
   const activeConnection = useActiveConnection();
   const tables = useStudioStore((s) => s.tables);
@@ -520,8 +533,14 @@ function SchemaViewerInner() {
       const edgeId = `edge-${rel.sourceTable}-${rel.sourceColumn}-${rel.targetTable}-${rel.targetColumn}`;
       const isSelected = selectedEdge === edgeId;
 
-      // Get relationship type label
-      const relTypeLabel = rel.type === 'one-to-one' ? '1:1' : rel.type === 'many-to-many' ? 'N:N' : '1:N';
+      // Cardinality now comes from the schema rather than being assumed, so the
+      // label is worth reading: 1:1 means the referencing column is unique.
+      const relTypeLabel = cardinalityLabel(rel.type);
+
+      // Optional participation — a nullable foreign key, so the child can exist
+      // without a parent. Drawn dashed, the usual ER convention, rather than
+      // spending label space on it.
+      const isOptional = rel.optional === true;
 
       return {
         id: edgeId,
@@ -559,6 +578,11 @@ function SchemaViewerInner() {
         style: {
           stroke: isSelected ? '#6366f1' : '#94a3b8',
           strokeWidth: isSelected ? 3 : 2,
+          ...(isOptional ? { strokeDasharray: '6 4' } : {}),
+        },
+        data: {
+          optional: isOptional,
+          junctionTable: rel.viaJunctionTable,
         },
       };
     });
@@ -622,7 +646,7 @@ function SchemaViewerInner() {
     [tables, getNodes, screenToFlowPosition, setCenter, fetchTableSchema]
   );
 
-  const handleExportImage = useCallback(async (format: 'png' | 'svg' = 'png') => {
+  const handleExportImage = useCallback(async (format: 'png' | 'svg' | 'pdf' = 'png') => {
     const viewport = document.querySelector('.react-flow__viewport') as HTMLElement;
     if (!viewport || nodes.length === 0) return;
 
@@ -681,6 +705,27 @@ function SchemaViewerInner() {
 
       let dataUrl: string;
       let filename: string;
+
+      if (format === 'pdf') {
+        // Rendered to PNG first and placed into the page, because a diagram is
+        // an image to a PDF either way — and going through PNG keeps the export
+        // identical to what the canvas shows, fonts and all.
+        const png = await toPng(viewport, { ...exportOptions, pixelRatio: 2 });
+
+        // jsPDF is imported here rather than at module scope so its ~350 KB does
+        // not load for everyone who merely opens the schema tab.
+        const { jsPDF } = await import('jspdf');
+        const landscape = imageWidth >= imageHeight;
+        const pdf = new jsPDF({
+          orientation: landscape ? 'landscape' : 'portrait',
+          unit: 'pt',
+          format: [imageWidth, imageHeight],
+        });
+
+        pdf.addImage(png, 'PNG', 0, 0, imageWidth, imageHeight);
+        pdf.save(`schema_${activeConnection?.name || 'database'}.pdf`);
+        return;
+      }
 
       if (format === 'svg') {
         dataUrl = await toSvg(viewport, exportOptions);
@@ -948,6 +993,10 @@ function SchemaViewerInner() {
                 <Image className="h-4 w-4 mr-2" />
                 Export as PNG
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExportImage('pdf')}>
+                <FileCode className="h-4 w-4 mr-2" />
+                Export as PDF
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => handleExportImage('svg')}>
                 <FileCode className="h-4 w-4 mr-2" />
                 Export as SVG
@@ -1001,8 +1050,25 @@ function SchemaViewerInner() {
                     <span className="text-muted-foreground">One-to-One</span>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <div className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border text-[9px] font-semibold text-slate-600 dark:text-slate-400">N:N</div>
-                    <span className="text-muted-foreground">Many-to-Many</span>
+                    <div className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border text-[9px] font-semibold text-slate-600 dark:text-slate-400">N:M</div>
+                    <span className="text-muted-foreground">Many-to-Many (via junction table)</span>
+                  </div>
+                </div>
+                {/* Participation — the dashed convention needs saying, or a
+                    dashed edge just reads as a rendering quirk. */}
+                <Separator className="my-1" />
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1.5">
+                    <svg width="28" height="8" className="shrink-0" aria-hidden="true">
+                      <line x1="0" y1="4" x2="28" y2="4" stroke="#94a3b8" strokeWidth="2" />
+                    </svg>
+                    <span className="text-muted-foreground">Required (NOT NULL key)</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <svg width="28" height="8" className="shrink-0" aria-hidden="true">
+                      <line x1="0" y1="4" x2="28" y2="4" stroke="#94a3b8" strokeWidth="2" strokeDasharray="6 4" />
+                    </svg>
+                    <span className="text-muted-foreground">Optional (nullable key)</span>
                   </div>
                 </div>
               </div>
@@ -1075,7 +1141,7 @@ function SchemaViewerInner() {
                     <div className="space-y-1">
                       {relationships.map((rel) => {
                         const edgeId = `edge-${rel.sourceTable}-${rel.sourceColumn}-${rel.targetTable}-${rel.targetColumn}`;
-                        const relTypeLabel = rel.type === 'one-to-one' ? '1:1' : rel.type === 'many-to-many' ? 'N:N' : '1:N';
+                        const relTypeLabel = cardinalityLabel(rel.type);
                         return (
                           <div
                             key={edgeId}
@@ -1096,6 +1162,11 @@ function SchemaViewerInner() {
                                 <span className="mx-0.5 text-muted-foreground">→</span>
                                 <span className="font-medium">{rel.targetTable}</span>
                                 <span className="text-amber-600 dark:text-amber-400">.{rel.targetColumn}</span>
+                                {/* The list cannot show a dashed line, so
+                                    optionality is spelled out instead. */}
+                                {rel.optional && (
+                                  <span className="ml-1 text-muted-foreground italic">optional</span>
+                                )}
                               </div>
                             </div>
                           </div>

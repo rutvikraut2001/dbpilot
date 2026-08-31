@@ -20,6 +20,10 @@ import {
 } from "./types";
 import { splitSqlStatements } from "../query-guard";
 import { quoteDoubleQuoted, withDatabase } from "../database-name";
+import {
+  junctionCandidates,
+  markJunctionTables,
+} from "../relationships";
 
 /**
  * Column types this adapter will build a statement from.
@@ -640,12 +644,34 @@ export class PostgresAdapter extends BaseAdapter {
     // every referenced one, so a composite foreign key on (a, b) drew four edges
     // — two of them between columns that are not related at all. Matching the
     // ordinal is what makes each edge the real relationship.
+    //
+    // `is_unique` and `is_optional` are what turn a foreign key into a
+    // cardinality. A foreign key is one-to-many unless its referencing columns
+    // are themselves unique, and optional when they are nullable — both read
+    // from the schema rather than assumed, which is what the diagram used to do.
     const query = `
       SELECT
         cl.relname AS source_table,
         att.attname AS source_column,
         ref_class.relname AS target_table,
-        ref_att.attname AS target_column
+        ref_att.attname AS target_column,
+        NOT att.attnotnull AS is_optional,
+        EXISTS (
+          SELECT 1
+          FROM pg_index idx
+          WHERE idx.indrelid = con.conrelid
+            AND idx.indisunique
+            -- A partial unique index constrains only the rows matching its
+            -- predicate, so it does not make the relationship one-to-one.
+            AND idx.indpred IS NULL
+            AND (
+              SELECT array_agg(k ORDER BY k)
+              FROM unnest(idx.indkey::int2[]) WITH ORDINALITY AS t(k, ord)
+              WHERE ord <= idx.indnkeyatts
+            ) = (
+              SELECT array_agg(k ORDER BY k) FROM unnest(con.conkey) AS k
+            )
+        ) AS is_unique
       FROM pg_constraint con
       JOIN pg_class cl ON cl.oid = con.conrelid
       JOIN pg_namespace ns ON ns.oid = cl.relnamespace
@@ -664,13 +690,42 @@ export class PostgresAdapter extends BaseAdapter {
 
     const result = await pool.query(query);
 
-    return result.rows.map((row) => ({
+    const relationships: Relationship[] = result.rows.map((row) => ({
       sourceTable: row.source_table,
       sourceColumn: row.source_column,
       targetTable: row.target_table,
       targetColumn: row.target_column,
-      type: "one-to-many" as const, // Default assumption
+      type: row.is_unique ? ("one-to-one" as const) : ("one-to-many" as const),
+      optional: row.is_optional,
     }));
+
+    // Deciding whether a table is a junction table needs its full column list,
+    // but only a handful of tables are ever candidates — so the columns are
+    // fetched for those rather than for the whole database.
+    const candidates = junctionCandidates(relationships);
+    if (candidates.length === 0) return relationships;
+
+    const columnRows = await pool.query(
+      `
+      SELECT c.relname AS table_name, a.attname AS column_name
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_attribute a
+        ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+      WHERE c.relname = ANY($1)
+        AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+      `,
+      [candidates]
+    );
+
+    const columnsByTable = new Map<string, string[]>();
+    for (const row of columnRows.rows) {
+      const existing = columnsByTable.get(row.table_name);
+      if (existing) existing.push(row.column_name);
+      else columnsByTable.set(row.table_name, [row.column_name]);
+    }
+
+    return markJunctionTables(relationships, columnsByTable);
   }
 
   async getRows(

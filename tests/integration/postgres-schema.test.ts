@@ -17,6 +17,18 @@ import { PostgresAdapter } from "@/lib/adapters/postgres";
  */
 const CONNECTION_STRING = process.env.TEST_POSTGRES_URL;
 
+/** Dropped child-first so the foreign keys do not block it. */
+const CARD_TABLES = [
+  "card_profile",
+  "card_post_tags",
+  "card_membership",
+  "card_order",
+  "card_post",
+  "card_tag",
+  "card_user",
+];
+const CASCADE = " CASCADE";
+
 describe.skipIf(!CONNECTION_STRING)("PostgreSQL schema introspection", () => {
   let adapter: PostgresAdapter;
 
@@ -111,6 +123,96 @@ describe.skipIf(!CONNECTION_STRING)("PostgreSQL schema introspection", () => {
           targetTable: "fk_parent",
           targetColumn: "services_id",
         })
+      );
+    });
+  });
+
+  describe("cardinality read from the schema", () => {
+    beforeAll(async () => {
+      for (const t of CARD_TABLES) {
+        await adapter.executeQuery(`DROP TABLE IF EXISTS ${t}${CASCADE}`);
+      }
+      await adapter.executeQuery("CREATE TABLE card_user (id serial PRIMARY KEY)");
+      await adapter.executeQuery("CREATE TABLE card_post (id serial PRIMARY KEY)");
+      await adapter.executeQuery("CREATE TABLE card_tag (id serial PRIMARY KEY)");
+      await adapter.executeQuery(
+        "CREATE TABLE card_profile (id serial PRIMARY KEY, user_id int UNIQUE NOT NULL REFERENCES card_user(id))"
+      );
+      await adapter.executeQuery(
+        "CREATE TABLE card_order (id serial PRIMARY KEY, user_id int REFERENCES card_user(id))"
+      );
+      await adapter.executeQuery(
+        "CREATE TABLE card_post_tags (post_id int NOT NULL REFERENCES card_post(id), tag_id int NOT NULL REFERENCES card_tag(id), PRIMARY KEY (post_id, tag_id))"
+      );
+      await adapter.executeQuery(
+        "CREATE TABLE card_membership (user_id int NOT NULL REFERENCES card_user(id), tag_id int NOT NULL REFERENCES card_tag(id), role text NOT NULL, PRIMARY KEY (user_id, tag_id))"
+      );
+    });
+
+    afterAll(async () => {
+      for (const t of CARD_TABLES) {
+        await adapter.executeQuery(`DROP TABLE IF EXISTS ${t}${CASCADE}`);
+      }
+    });
+
+    async function cardRelationships() {
+      return (await adapter.getRelationships()).filter((r) =>
+        r.sourceTable.startsWith("card_")
+      );
+    }
+
+    it("calls a unique foreign key one-to-one", async () => {
+      // The constraint that stops a second child pointing at the same parent.
+      // Every relationship used to be reported as one-to-many regardless.
+      const profile = (await cardRelationships()).find(
+        (r) => r.sourceTable === "card_profile"
+      );
+
+      expect(profile?.type).toBe("one-to-one");
+    });
+
+    it("calls a plain foreign key one-to-many", async () => {
+      const order = (await cardRelationships()).find(
+        (r) => r.sourceTable === "card_order"
+      );
+
+      expect(order?.type).toBe("one-to-many");
+    });
+
+    it("marks a nullable foreign key as optional", async () => {
+      const relationships = await cardRelationships();
+
+      expect(
+        relationships.find((r) => r.sourceTable === "card_order")?.optional
+      ).toBe(true);
+      expect(
+        relationships.find((r) => r.sourceTable === "card_profile")?.optional
+      ).toBe(false);
+    });
+
+    it("reports a pure junction table as many-to-many", async () => {
+      const junction = (await cardRelationships()).filter(
+        (r) => r.sourceTable === "card_post_tags"
+      );
+
+      expect(junction).toHaveLength(2);
+      for (const relationship of junction) {
+        expect(relationship.type).toBe("many-to-many");
+        expect(relationship.viaJunctionTable).toBe("card_post_tags");
+      }
+    });
+
+    it("leaves a join table that carries its own column alone", async () => {
+      // card_membership has a `role`, which makes it an entity. Collapsing it
+      // into a many-to-many would hide that column from the diagram.
+      const membership = (await cardRelationships()).filter(
+        (r) => r.sourceTable === "card_membership"
+      );
+
+      expect(membership).toHaveLength(2);
+      expect(membership.every((r) => r.type === "one-to-many")).toBe(true);
+      expect(membership.every((r) => r.viaJunctionTable === undefined)).toBe(
+        true
       );
     });
   });

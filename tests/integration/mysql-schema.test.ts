@@ -17,6 +17,18 @@ import { MySQLAdapter } from "@/lib/adapters/mysql";
  */
 const CONNECTION_STRING = process.env.TEST_MYSQL_URL;
 
+/** Dropped child-first so the foreign keys do not block it. */
+const CARD_TABLES = [
+  "card_profile",
+  "card_post_tags",
+  "card_membership",
+  "card_order",
+  "card_post",
+  "card_tag",
+  "card_user",
+];
+const CASCADE = "";
+
 describe.skipIf(!CONNECTION_STRING)("MySQL schema and CRUD", () => {
   let adapter: MySQLAdapter;
 
@@ -246,17 +258,112 @@ describe.skipIf(!CONNECTION_STRING)("MySQL schema and CRUD", () => {
     });
   });
 
+  describe("cardinality read from the schema", () => {
+    beforeAll(async () => {
+      for (const t of CARD_TABLES) {
+        await adapter.executeQuery(`DROP TABLE IF EXISTS ${t}${CASCADE}`);
+      }
+      await adapter.executeQuery("CREATE TABLE card_user (id int AUTO_INCREMENT PRIMARY KEY)");
+      await adapter.executeQuery("CREATE TABLE card_post (id int AUTO_INCREMENT PRIMARY KEY)");
+      await adapter.executeQuery("CREATE TABLE card_tag (id int AUTO_INCREMENT PRIMARY KEY)");
+      await adapter.executeQuery(
+        "CREATE TABLE card_profile (id int AUTO_INCREMENT PRIMARY KEY, user_id int NOT NULL UNIQUE, FOREIGN KEY (user_id) REFERENCES card_user(id))"
+      );
+      await adapter.executeQuery(
+        "CREATE TABLE card_order (id int AUTO_INCREMENT PRIMARY KEY, user_id int NULL, KEY k_order (user_id), FOREIGN KEY (user_id) REFERENCES card_user(id))"
+      );
+      await adapter.executeQuery(
+        "CREATE TABLE card_post_tags (post_id int NOT NULL, tag_id int NOT NULL, PRIMARY KEY (post_id, tag_id), KEY k_pt (tag_id), FOREIGN KEY (post_id) REFERENCES card_post(id), FOREIGN KEY (tag_id) REFERENCES card_tag(id))"
+      );
+      await adapter.executeQuery(
+        "CREATE TABLE card_membership (user_id int NOT NULL, tag_id int NOT NULL, role varchar(32) NOT NULL, PRIMARY KEY (user_id, tag_id), KEY k_m (tag_id), FOREIGN KEY (user_id) REFERENCES card_user(id), FOREIGN KEY (tag_id) REFERENCES card_tag(id))"
+      );
+    });
+
+    afterAll(async () => {
+      for (const t of CARD_TABLES) {
+        await adapter.executeQuery(`DROP TABLE IF EXISTS ${t}${CASCADE}`);
+      }
+    });
+
+    async function cardRelationships() {
+      return (await adapter.getRelationships()).filter((r) =>
+        r.sourceTable.startsWith("card_")
+      );
+    }
+
+    it("calls a unique foreign key one-to-one", async () => {
+      // The constraint that stops a second child pointing at the same parent.
+      // Every relationship used to be reported as one-to-many regardless.
+      const profile = (await cardRelationships()).find(
+        (r) => r.sourceTable === "card_profile"
+      );
+
+      expect(profile?.type).toBe("one-to-one");
+    });
+
+    it("calls a plain foreign key one-to-many", async () => {
+      const order = (await cardRelationships()).find(
+        (r) => r.sourceTable === "card_order"
+      );
+
+      expect(order?.type).toBe("one-to-many");
+    });
+
+    it("marks a nullable foreign key as optional", async () => {
+      const relationships = await cardRelationships();
+
+      expect(
+        relationships.find((r) => r.sourceTable === "card_order")?.optional
+      ).toBe(true);
+      expect(
+        relationships.find((r) => r.sourceTable === "card_profile")?.optional
+      ).toBe(false);
+    });
+
+    it("reports a pure junction table as many-to-many", async () => {
+      const junction = (await cardRelationships()).filter(
+        (r) => r.sourceTable === "card_post_tags"
+      );
+
+      expect(junction).toHaveLength(2);
+      for (const relationship of junction) {
+        expect(relationship.type).toBe("many-to-many");
+        expect(relationship.viaJunctionTable).toBe("card_post_tags");
+      }
+    });
+
+    it("leaves a join table that carries its own column alone", async () => {
+      // card_membership has a `role`, which makes it an entity. Collapsing it
+      // into a many-to-many would hide that column from the diagram.
+      const membership = (await cardRelationships()).filter(
+        (r) => r.sourceTable === "card_membership"
+      );
+
+      expect(membership).toHaveLength(2);
+      expect(membership.every((r) => r.type === "one-to-many")).toBe(true);
+      expect(membership.every((r) => r.viaJunctionTable === undefined)).toBe(
+        true
+      );
+    });
+  });
+
   describe("getRelationships", () => {
     it("reports the foreign key between the two tables", async () => {
       const relationships = await adapter.getRelationships();
 
-      expect(relationships).toContainEqual({
-        sourceTable: "schema_items",
-        sourceColumn: "owner_id",
-        targetTable: "schema_owners",
-        targetColumn: "id",
-        type: "one-to-many",
-      });
+      // objectContaining, not an exact match: relationships also carry
+      // cardinality detail (optional, viaJunctionTable) that this test is not
+      // about, and pinning the whole shape here would break on every addition.
+      expect(relationships).toContainEqual(
+        expect.objectContaining({
+          sourceTable: "schema_items",
+          sourceColumn: "owner_id",
+          targetTable: "schema_owners",
+          targetColumn: "id",
+          type: "one-to-many",
+        })
+      );
     });
   });
 

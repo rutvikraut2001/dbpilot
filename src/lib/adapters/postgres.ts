@@ -10,6 +10,8 @@ import {
   TableStats,
   IndexInfo,
   DatabaseInfo,
+  SchemaChange,
+  SchemaChangePlan,
   CreateIndexOptions,
   AdapterCapabilities,
   ExecuteQueryOptions,
@@ -18,6 +20,30 @@ import {
 } from "./types";
 import { splitSqlStatements } from "../query-guard";
 import { quoteDoubleQuoted, withDatabase } from "../database-name";
+
+/**
+ * Column types this adapter will build a statement from.
+ *
+ * Deliberately a list of the types people actually reach for rather than every
+ * type PostgreSQL knows: anything outside it is better written by hand in the
+ * query editor, where the user can see the whole statement.
+ */
+const POSTGRES_TYPES = new Set([
+  "smallint", "integer", "int", "int2", "int4", "int8", "bigint",
+  "serial", "bigserial", "smallserial",
+  "decimal", "numeric", "real", "double precision", "float4", "float8", "money",
+  "varchar", "character varying", "char", "character", "text", "citext",
+  "bytea",
+  "boolean", "bool",
+  "date", "time", "timetz", "timestamp", "timestamptz",
+  "time with time zone", "time without time zone",
+  "timestamp with time zone", "timestamp without time zone",
+  "interval",
+  "uuid", "json", "jsonb", "xml",
+  "inet", "cidr", "macaddr",
+  "point", "line", "polygon", "circle",
+  "tsvector", "tsquery",
+]);
 
 /** Ceiling on a single query, applied to every pooled connection. */
 const STATEMENT_TIMEOUT_MS = 30000;
@@ -31,6 +57,7 @@ export class PostgresAdapter extends BaseAdapter {
     supportsTransactions: true,
     supportsIndexManagement: true,
     supportsDatabaseCreate: true,
+    supportsSchemaEdit: true,
   };
 
   /**
@@ -250,6 +277,179 @@ export class PostgresAdapter extends BaseAdapter {
   async createDatabase(name: string): Promise<void> {
     // Copying a large template database can also outrun the query ceiling.
     await this.runUnboundedDdl(`CREATE DATABASE ${quoteDoubleQuoted(name)}`);
+  }
+
+  /**
+   * Type names this adapter will put in a statement.
+   *
+   * A type cannot be parameterized, so it is interpolated — and an allowlist is
+   * what keeps that safe. Parameters are matched separately so `varchar(64)` and
+   * `numeric(10, 2)` work without admitting arbitrary text.
+   */
+  private validateColumnType(type: string): string {
+    const normalized = type.trim();
+
+    // A base name, optionally with numeric parameters, optionally an array.
+    const match = /^([a-z][a-z0-9_ ]*?)\s*(\(\s*\d+\s*(?:,\s*\d+\s*)?\))?\s*(\[\])?$/i.exec(
+      normalized
+    );
+
+    if (!match) {
+      throw new Error(`Invalid column type: ${type}`);
+    }
+
+    const base = match[1].toLowerCase().replace(/\s+/g, " ");
+    if (!POSTGRES_TYPES.has(base)) {
+      throw new Error(
+        `Unsupported column type: ${type}. Use one of ${[...POSTGRES_TYPES].slice(0, 12).join(", ")}, or run the ALTER statement yourself in the query editor.`
+      );
+    }
+
+    return `${base}${match[2] ?? ""}${match[3] ?? ""}`;
+  }
+
+  // Async to match the interface: MySQL has to read the current schema before it
+  // can render a correct statement, where PostgreSQL does not.
+  async planSchemaChanges(
+    table: string,
+    changes: SchemaChange[]
+  ): Promise<SchemaChangePlan> {
+    const quotedTable = this.quoteIdentifier(table);
+    const statements: string[] = [];
+    const warnings: string[] = [];
+
+    for (const change of changes) {
+      switch (change.kind) {
+        case "addColumn": {
+          this.validateColumnName(change.column.name);
+          const type = this.validateColumnType(change.column.type);
+          const parts = [
+            `ALTER TABLE ${quotedTable} ADD COLUMN "${change.column.name}" ${type}`,
+          ];
+
+          if (change.column.nullable === false) {
+            parts.push("NOT NULL");
+            if (
+              change.column.defaultValue === undefined ||
+              change.column.defaultValue === null
+            ) {
+              warnings.push(
+                `Adding "${change.column.name}" as NOT NULL without a default fails unless the table is empty.`
+              );
+            }
+          }
+          if (
+            change.column.defaultValue !== undefined &&
+            change.column.defaultValue !== null
+          ) {
+            parts.push(`DEFAULT ${change.column.defaultValue}`);
+          }
+
+          statements.push(parts.join(" "));
+          break;
+        }
+
+        case "dropColumn": {
+          this.validateColumnName(change.name);
+          statements.push(
+            `ALTER TABLE ${quotedTable} DROP COLUMN "${change.name}"`
+          );
+          warnings.push(
+            `Dropping "${change.name}" discards its data permanently.`
+          );
+          break;
+        }
+
+        case "renameColumn": {
+          this.validateColumnName(change.from);
+          this.validateColumnName(change.to);
+          statements.push(
+            `ALTER TABLE ${quotedTable} RENAME COLUMN "${change.from}" TO "${change.to}"`
+          );
+          warnings.push(
+            `Renaming "${change.from}" breaks any query, view or application code still using the old name.`
+          );
+          break;
+        }
+
+        case "setType": {
+          this.validateColumnName(change.name);
+          const type = this.validateColumnType(change.type);
+          const using = change.using
+            ? ` USING ${change.using}`
+            : "";
+          statements.push(
+            `ALTER TABLE ${quotedTable} ALTER COLUMN "${change.name}" TYPE ${type}${using}`
+          );
+          warnings.push(
+            `Changing the type of "${change.name}" rewrites the whole table and holds an ACCESS EXCLUSIVE lock while it runs — reads and writes both block.`
+          );
+          break;
+        }
+
+        case "setNullable": {
+          this.validateColumnName(change.name);
+          statements.push(
+            `ALTER TABLE ${quotedTable} ALTER COLUMN "${change.name}" ${change.nullable ? "DROP" : "SET"} NOT NULL`
+          );
+          if (!change.nullable) {
+            warnings.push(
+              `Setting "${change.name}" NOT NULL fails if any existing row holds a null.`
+            );
+          }
+          break;
+        }
+
+        case "setDefault": {
+          this.validateColumnName(change.name);
+          statements.push(
+            change.defaultValue === null
+              ? `ALTER TABLE ${quotedTable} ALTER COLUMN "${change.name}" DROP DEFAULT`
+              : `ALTER TABLE ${quotedTable} ALTER COLUMN "${change.name}" SET DEFAULT ${change.defaultValue}`
+          );
+          break;
+        }
+      }
+    }
+
+    // PostgreSQL has transactional DDL, so the whole edit succeeds or none of it
+    // does — which is what makes applying several changes at once safe here.
+    return { statements, atomic: true, warnings };
+  }
+
+  /**
+   * Apply structural changes inside a single transaction.
+   *
+   * The transaction is the feature, not a formality: PostgreSQL rolls DDL back,
+   * so an edit that fails on its third statement leaves the table exactly as it
+   * was rather than half-changed.
+   */
+  async alterTable(table: string, changes: SchemaChange[]): Promise<void> {
+    const { statements } = await this.planSchemaChanges(table, changes);
+    if (statements.length === 0) return;
+
+    const client = await this.getPool().connect();
+
+    try {
+      // A type change rewrites the table and can outrun the query ceiling, the
+      // same way an index build does.
+      await client.query("SET statement_timeout = 0");
+      await client.query("BEGIN");
+
+      for (const statement of statements) {
+        await client.query(statement);
+      }
+
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      await client
+        .query(`SET statement_timeout = '${STATEMENT_TIMEOUT_MS}'`)
+        .catch(() => {});
+      client.release();
+    }
   }
 
   async getTables(): Promise<TableInfo[]> {

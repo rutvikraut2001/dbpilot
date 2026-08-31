@@ -44,6 +44,11 @@ export class ClickHouseAdapter extends BaseAdapter {
     supportsIndexManagement: false,
     // Unlike its index model, CREATE DATABASE is ordinary DDL here.
     supportsDatabaseCreate: true,
+    // ClickHouse column changes are asynchronous mutations that rewrite parts
+    // in the background; the statement returning says nothing about the table
+    // being changed yet. That does not fit a contract whose caller expects the
+    // edit to be done when the promise resolves.
+    supportsSchemaEdit: false,
   };
 
   /** Database the client is bound to; ClickHouse always resolves one. */

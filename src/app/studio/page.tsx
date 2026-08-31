@@ -9,6 +9,7 @@ import {
   Code2,
   GitBranch,
   ListTree,
+  Columns3,
   LogOut,
   Shield,
   ShieldOff,
@@ -40,6 +41,7 @@ import { DataViewer } from '@/components/data-table/data-viewer';
 import { QueryEditor } from '@/components/query-editor/query-editor';
 import { SchemaViewer } from '@/components/schema-viewer/schema-viewer';
 import { IndexManager } from '@/components/indexes/index-manager';
+import { TableStructure } from '@/components/structure/table-structure';
 import { DatabaseSwitcher } from '@/components/connection/database-switcher';
 import {
   useConnectionStore,
@@ -82,7 +84,9 @@ export default function StudioPage() {
   useEffect(() => {
     if (
       activeConnection?.type === 'redis' &&
-      (activeTab === 'schema' || activeTab === 'indexes')
+      (activeTab === 'schema' ||
+        activeTab === 'indexes' ||
+        activeTab === 'structure')
     ) {
       setActiveTab('data');
     }
@@ -545,6 +549,15 @@ export default function StudioPage() {
                 )}
                 {activeConnection.type !== 'redis' && (
                   <TabsTrigger
+                    value="structure"
+                    className="px-4 h-9 data-[state=active]:bg-muted rounded-none border-b-2 border-transparent data-[state=active]:border-primary"
+                  >
+                    <Columns3 className="h-4 w-4 mr-2" />
+                    Structure
+                  </TabsTrigger>
+                )}
+                {activeConnection.type !== 'redis' && (
+                  <TabsTrigger
                     value="indexes"
                     className="px-4 h-9 data-[state=active]:bg-muted rounded-none border-b-2 border-transparent data-[state=active]:border-primary"
                   >
@@ -583,6 +596,7 @@ export default function StudioPage() {
             {activeTab === 'query' && <QueryEditor />}
             {activeTab === 'schema' && <SchemaViewer />}
             {activeTab === 'indexes' && <IndexManager />}
+            {activeTab === 'structure' && <TableStructure />}
           </div>
         </div>
       </div>

@@ -115,6 +115,21 @@ table list follows the switch. Requires `TEST_POSTGRES_URL`.
 `getTables()` returning an empty list instead of throwing is the behaviour under
 test. Requires `TEST_MYSQL_URL`.
 
+**`tests/integration/postgres-schema-edit.test.ts`** — altering a table's
+columns. The property that matters is transactional DDL: an edit whose third
+statement fails must leave the table exactly as it was, which is what makes
+applying several changes at once safe on PostgreSQL. Also pins that a type
+change restores the query ceiling afterwards, and that a type outside the
+allowlist is refused rather than interpolated. Requires `TEST_POSTGRES_URL`.
+
+**`tests/integration/mysql-schema-edit.test.ts`** — the same operations where
+the engine behaves differently, and both differences are traps. `MODIFY COLUMN`
+replaces a column's *whole* definition, so changing a type without restating
+NOT NULL and DEFAULT silently drops them — the suite asserts both survive. And
+MySQL commits each DDL statement as it runs, so a failed multi-step edit leaves
+earlier changes applied; that is asserted rather than glossed over, because the
+UI has to say so. Requires `TEST_MYSQL_URL`.
+
 **`tests/unit/index-health.test.ts`** — the index health rules, which decide
 what the UI suggests *dropping*. The cases that matter are the false positives: a
 partial index must never make a full index look redundant (dropping it would

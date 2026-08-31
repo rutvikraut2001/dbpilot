@@ -18,6 +18,7 @@ export type AuditAction =
   | "index.create"
   | "index.drop"
   | "database.create"
+  | "schema.alter"
   | "settings.change";
 
 interface AuditEntry {

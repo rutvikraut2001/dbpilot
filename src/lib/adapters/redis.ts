@@ -31,6 +31,8 @@ export class RedisAdapter extends BaseAdapter {
     // Redis keyspaces are numbered and fixed by server configuration; there is
     // no CREATE DATABASE to offer.
     supportsDatabaseCreate: false,
+    // Redis has no tables.
+    supportsSchemaEdit: false,
   };
 
   /**

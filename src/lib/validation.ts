@@ -81,6 +81,57 @@ export const CreateDatabaseSchema = z.object({
     .optional(),
 });
 
+/**
+ * One structural change to a table.
+ *
+ * Column *names* are validated strictly here — unlike database names, these do
+ * go through the identifier rules, and each adapter validates again before
+ * interpolating. Types and defaults are checked at the adapter, against that
+ * engine's allowlist, because the valid set differs per engine.
+ */
+export const SchemaChangeSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("addColumn"),
+    column: z.object({
+      name: ColumnNameSchema,
+      type: z.string().min(1).max(64),
+      nullable: z.boolean().optional(),
+      defaultValue: z.string().max(500).nullable().optional(),
+    }),
+  }),
+  z.object({ kind: z.literal("dropColumn"), name: ColumnNameSchema }),
+  z.object({
+    kind: z.literal("renameColumn"),
+    from: ColumnNameSchema,
+    to: ColumnNameSchema,
+  }),
+  z.object({
+    kind: z.literal("setType"),
+    name: ColumnNameSchema,
+    type: z.string().min(1).max(64),
+    using: z.string().max(500).optional(),
+  }),
+  z.object({
+    kind: z.literal("setNullable"),
+    name: ColumnNameSchema,
+    nullable: z.boolean(),
+  }),
+  z.object({
+    kind: z.literal("setDefault"),
+    name: ColumnNameSchema,
+    defaultValue: z.string().max(500).nullable(),
+  }),
+]);
+
+export const AlterTableSchema = z.object({
+  connectionId: ConnectionIdSchema,
+  table: TableNameSchema,
+  changes: z
+    .array(SchemaChangeSchema)
+    .min(1, "At least one change is required")
+    .max(50, "Too many changes in one edit"),
+});
+
 export const CreateIndexSchema = z.object({
   connectionId: ConnectionIdSchema,
   table: TableNameSchema,

@@ -10,6 +10,8 @@ import {
   TableStats,
   IndexInfo,
   DatabaseInfo,
+  SchemaChange,
+  SchemaChangePlan,
   CreateIndexOptions,
   AdapterCapabilities,
   ExecuteQueryOptions,
@@ -21,6 +23,22 @@ import {
   withDatabase,
   databaseFromConnectionString,
 } from "../database-name";
+
+/**
+ * Column types this adapter will build a statement from.
+ *
+ * Deliberately the types people reach for rather than everything MySQL knows;
+ * anything else is better written by hand in the query editor.
+ */
+const MYSQL_TYPES = new Set([
+  "tinyint", "smallint", "mediumint", "int", "integer", "bigint",
+  "decimal", "numeric", "float", "double", "bit",
+  "char", "varchar", "tinytext", "text", "mediumtext", "longtext",
+  "binary", "varbinary", "tinyblob", "blob", "mediumblob", "longblob",
+  "date", "datetime", "timestamp", "time", "year",
+  "boolean", "bool", "json", "enum", "set",
+  "geometry", "point", "linestring", "polygon",
+]);
 
 /** Schemas MySQL owns; never surfaced as user tables. */
 const SYSTEM_SCHEMAS = [
@@ -194,6 +212,7 @@ export class MySQLAdapter extends BaseAdapter {
     supportsTransactions: true,
     supportsIndexManagement: true,
     supportsDatabaseCreate: true,
+    supportsSchemaEdit: true,
   };
 
   private pool: Pool | null = null;
@@ -517,6 +536,201 @@ export class MySQLAdapter extends BaseAdapter {
   async createDatabase(name: string): Promise<void> {
     const pool = this.getPool();
     await pool.query(`CREATE DATABASE ${quoteBackticked(name)}`);
+  }
+
+  /**
+   * Type names this adapter will put in a statement.
+   *
+   * A type cannot be parameterized, so it is interpolated, and an allowlist is
+   * what keeps that safe. Parameters and the unsigned/zerofill modifiers are
+   * matched separately so `varchar(64)` and `decimal(10, 2) unsigned` work
+   * without admitting arbitrary text.
+   */
+  private validateColumnType(type: string): string {
+    const normalized = type.trim().replace(/\s+/g, " ");
+
+    const match =
+      /^([a-z][a-z0-9_ ]*?)\s*(\(\s*\d+\s*(?:,\s*\d+\s*)?\))?((?:\s+(?:unsigned|zerofill))*)$/i.exec(
+        normalized
+      );
+
+    if (!match) {
+      throw new Error(`Invalid column type: ${type}`);
+    }
+
+    const base = match[1].toLowerCase().trim();
+    if (!MYSQL_TYPES.has(base)) {
+      throw new Error(
+        `Unsupported column type: ${type}. Use one of ${[...MYSQL_TYPES].slice(0, 12).join(", ")}, or run the ALTER statement yourself in the query editor.`
+      );
+    }
+
+    return `${base}${match[2] ?? ""}${match[3].toLowerCase()}`;
+  }
+
+  /**
+   * Render a column's full definition, preserving what MODIFY would otherwise
+   * discard.
+   *
+   * This is the MySQL trap the plan exists to avoid: `MODIFY COLUMN c BIGINT`
+   * does not narrow the change to the type — it *replaces the whole definition*,
+   * silently dropping NOT NULL and DEFAULT unless they are restated. A user
+   * changing an int to a bigint would quietly lose a not-null constraint.
+   */
+  private renderColumnDefinition(
+    type: string,
+    nullable: boolean,
+    defaultValue: string | null | undefined
+  ): string {
+    const parts = [type];
+    parts.push(nullable ? "NULL" : "NOT NULL");
+
+    if (defaultValue !== undefined && defaultValue !== null) {
+      parts.push(`DEFAULT ${defaultValue}`);
+    }
+
+    return parts.join(" ");
+  }
+
+  async planSchemaChanges(
+    table: string,
+    changes: SchemaChange[]
+  ): Promise<SchemaChangePlan> {
+    const quotedTable = this.quoteIdentifier(table);
+    const statements: string[] = [];
+    const warnings: string[] = [];
+
+    // Read once: MODIFY needs the column's current nullability and default, and
+    // querying per change would be a round trip each.
+    const existing = new Map(
+      (await this.getTableSchema(table)).map((column) => [column.name, column])
+    );
+
+    for (const change of changes) {
+      switch (change.kind) {
+        case "addColumn": {
+          this.validateColumnName(change.column.name);
+          const type = this.validateColumnType(change.column.type);
+          const definition = this.renderColumnDefinition(
+            type,
+            change.column.nullable !== false,
+            change.column.defaultValue
+          );
+
+          statements.push(
+            `ALTER TABLE ${quotedTable} ADD COLUMN ${this.backtick(change.column.name)} ${definition}`
+          );
+
+          if (
+            change.column.nullable === false &&
+            (change.column.defaultValue === undefined ||
+              change.column.defaultValue === null)
+          ) {
+            warnings.push(
+              `Adding "${change.column.name}" as NOT NULL without a default gives existing rows an implicit zero or empty string rather than failing.`
+            );
+          }
+          break;
+        }
+
+        case "dropColumn": {
+          this.validateColumnName(change.name);
+          statements.push(
+            `ALTER TABLE ${quotedTable} DROP COLUMN ${this.backtick(change.name)}`
+          );
+          warnings.push(
+            `Dropping "${change.name}" discards its data permanently.`
+          );
+          break;
+        }
+
+        case "renameColumn": {
+          this.validateColumnName(change.from);
+          this.validateColumnName(change.to);
+          // RENAME COLUMN needs MySQL 8.0 / MariaDB 10.5.2. Older servers need
+          // CHANGE with the whole definition restated, which is exactly the
+          // footgun above — so this reports the version requirement instead.
+          statements.push(
+            `ALTER TABLE ${quotedTable} RENAME COLUMN ${this.backtick(change.from)} TO ${this.backtick(change.to)}`
+          );
+          warnings.push(
+            `Renaming "${change.from}" breaks any query, view or application code still using the old name.`
+          );
+          break;
+        }
+
+        case "setType": {
+          this.validateColumnName(change.name);
+          const type = this.validateColumnType(change.type);
+          const current = existing.get(change.name);
+
+          if (!current) {
+            throw new Error(
+              `No column named ${change.name} on ${table}`
+            );
+          }
+
+          statements.push(
+            `ALTER TABLE ${quotedTable} MODIFY COLUMN ${this.backtick(change.name)} ${this.renderColumnDefinition(type, current.nullable, current.defaultValue)}`
+          );
+          warnings.push(
+            `Changing the type of "${change.name}" rebuilds the table; on a large one this takes time and may block writes.`
+          );
+          break;
+        }
+
+        case "setNullable": {
+          this.validateColumnName(change.name);
+          const current = existing.get(change.name);
+
+          if (!current) {
+            throw new Error(`No column named ${change.name} on ${table}`);
+          }
+
+          // Same trap: nullability can only be changed by restating the whole
+          // definition, so the existing type and default are carried over.
+          statements.push(
+            `ALTER TABLE ${quotedTable} MODIFY COLUMN ${this.backtick(change.name)} ${this.renderColumnDefinition(current.type, change.nullable, current.defaultValue)}`
+          );
+
+          if (!change.nullable) {
+            warnings.push(
+              `Setting "${change.name}" NOT NULL replaces existing nulls with an implicit default rather than failing.`
+            );
+          }
+          break;
+        }
+
+        case "setDefault": {
+          this.validateColumnName(change.name);
+          statements.push(
+            change.defaultValue === null
+              ? `ALTER TABLE ${quotedTable} ALTER COLUMN ${this.backtick(change.name)} DROP DEFAULT`
+              : `ALTER TABLE ${quotedTable} ALTER COLUMN ${this.backtick(change.name)} SET DEFAULT ${change.defaultValue}`
+          );
+          break;
+        }
+      }
+    }
+
+    if (statements.length > 1) {
+      warnings.push(
+        "MySQL commits each statement as it runs. If one fails, the changes before it stay applied."
+      );
+    }
+
+    // Not atomic: unlike PostgreSQL, MySQL implicitly commits at each DDL
+    // statement, so a batch cannot be rolled back as a unit.
+    return { statements, atomic: false, warnings };
+  }
+
+  async alterTable(table: string, changes: SchemaChange[]): Promise<void> {
+    const { statements } = await this.planSchemaChanges(table, changes);
+    const pool = this.getPool();
+
+    for (const statement of statements) {
+      await pool.query(statement);
+    }
   }
 
   async getTables(): Promise<TableInfo[]> {

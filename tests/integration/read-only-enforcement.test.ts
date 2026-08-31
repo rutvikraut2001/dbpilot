@@ -28,11 +28,14 @@ interface FakeAdapter {
   capabilities: {
     supportsIndexManagement: boolean;
     supportsDatabaseCreate: boolean;
+    supportsSchemaEdit: boolean;
   };
   listDatabases: ReturnType<typeof vi.fn>;
   getCurrentDatabase: ReturnType<typeof vi.fn>;
   useDatabase: ReturnType<typeof vi.fn>;
   createDatabase: ReturnType<typeof vi.fn>;
+  planSchemaChanges: ReturnType<typeof vi.fn>;
+  alterTable: ReturnType<typeof vi.fn>;
   getIndexInfo: ReturnType<typeof vi.fn>;
   getTableStats: ReturnType<typeof vi.fn>;
   createIndex: ReturnType<typeof vi.fn>;
@@ -62,11 +65,16 @@ function makeAdapter(dialect: FakeAdapter["dialect"] = "sql"): FakeAdapter {
     capabilities: {
       supportsIndexManagement: true,
       supportsDatabaseCreate: true,
+      supportsSchemaEdit: true,
     },
     listDatabases: vi.fn().mockResolvedValue([]),
     getCurrentDatabase: vi.fn().mockReturnValue("appdb"),
     useDatabase: vi.fn().mockResolvedValue(undefined),
     createDatabase: vi.fn().mockResolvedValue(undefined),
+    planSchemaChanges: vi
+      .fn()
+      .mockResolvedValue({ statements: [], atomic: true, warnings: [] }),
+    alterTable: vi.fn().mockResolvedValue(undefined),
     getIndexInfo: vi.fn().mockResolvedValue([]),
     getTableStats: vi
       .fn()
@@ -122,8 +130,19 @@ async function loadModules(env: { forceReadOnly?: boolean } = {}) {
   const connect = await import("@/app/api/connect/route");
   const indexes = await import("@/app/api/indexes/route");
   const databases = await import("@/app/api/databases/route");
+  const schemaAlter = await import("@/app/api/schema/alter/route");
 
-  return { state, data, query, redis, settings, connect, indexes, databases };
+  return {
+    state,
+    data,
+    query,
+    redis,
+    settings,
+    connect,
+    indexes,
+    databases,
+    schemaAlter,
+  };
 }
 
 function jsonRequest(url: string, method: string, body: unknown): NextRequest {
@@ -457,6 +476,7 @@ describe("read-only mode blocks index management", () => {
     adapter.capabilities = {
       supportsIndexManagement: false,
       supportsDatabaseCreate: true,
+      supportsSchemaEdit: true,
     };
 
     const response = await indexes.POST(
@@ -580,6 +600,109 @@ describe("read-only mode blocks creating a database", () => {
 
     expect(response.status).toBe(400);
     expect(adapter.createDatabase).not.toHaveBeenCalled();
+  });
+});
+
+describe("read-only mode blocks table structure changes", () => {
+  const DROP_COLUMN = {
+    connectionId: CONN,
+    table: "users",
+    changes: [{ kind: "dropColumn", name: "email" }],
+  };
+
+  it("refuses to alter a table", async () => {
+    const { schemaAlter } = await loadModules();
+
+    const response = await schemaAlter.PUT(
+      jsonRequest("http://localhost/api/schema/alter", "PUT", DROP_COLUMN)
+    );
+
+    expect(response.status).toBe(403);
+    // Dropping a column destroys data; the adapter must not be reached at all.
+    expect(adapter.alterTable).not.toHaveBeenCalled();
+  });
+
+  it("still allows previewing the statements", async () => {
+    // Rendering SQL changes nothing, and seeing what *would* run is exactly
+    // what someone on a read-only production connection wants.
+    const { schemaAlter } = await loadModules();
+
+    const response = await schemaAlter.POST(
+      jsonRequest("http://localhost/api/schema/alter", "POST", DROP_COLUMN)
+    );
+
+    expect(response.status).toBe(200);
+    expect(adapter.planSchemaChanges).toHaveBeenCalled();
+    expect(adapter.alterTable).not.toHaveBeenCalled();
+  });
+
+  it("marks a preview containing a drop as destructive", async () => {
+    const { schemaAlter } = await loadModules();
+
+    const response = await schemaAlter.POST(
+      jsonRequest("http://localhost/api/schema/alter", "POST", DROP_COLUMN)
+    );
+
+    expect(await response.json()).toMatchObject({ destructive: true });
+  });
+
+  it("does not mark an additive change as destructive", async () => {
+    const { schemaAlter } = await loadModules();
+
+    const response = await schemaAlter.POST(
+      jsonRequest("http://localhost/api/schema/alter", "POST", {
+        connectionId: CONN,
+        table: "users",
+        changes: [
+          { kind: "addColumn", column: { name: "nickname", type: "text" } },
+        ],
+      })
+    );
+
+    expect(await response.json()).toMatchObject({ destructive: false });
+  });
+
+  it("allows altering once write access is granted", async () => {
+    const { state, schemaAlter } = await loadModules();
+    state.setReadOnlyMode(CONN, false);
+
+    const response = await schemaAlter.PUT(
+      jsonRequest("http://localhost/api/schema/alter", "PUT", DROP_COLUMN)
+    );
+
+    expect(response.status).toBe(200);
+    expect(adapter.alterTable).toHaveBeenCalledWith("users", [
+      { kind: "dropColumn", name: "email" },
+    ]);
+  });
+
+  it("refuses an engine that cannot edit structure", async () => {
+    const { state, schemaAlter } = await loadModules();
+    state.setReadOnlyMode(CONN, false);
+    adapter.capabilities.supportsSchemaEdit = false;
+
+    const response = await schemaAlter.PUT(
+      jsonRequest("http://localhost/api/schema/alter", "PUT", DROP_COLUMN)
+    );
+
+    expect(response.status).toBe(400);
+    expect(adapter.alterTable).not.toHaveBeenCalled();
+  });
+
+  it("rejects an injected column name before reaching the adapter", async () => {
+    const { state, schemaAlter } = await loadModules();
+    state.setReadOnlyMode(CONN, false);
+
+    const response = await schemaAlter.PUT(
+      jsonRequest("http://localhost/api/schema/alter", "PUT", {
+        connectionId: CONN,
+        table: "users",
+        changes: [{ kind: "dropColumn", name: 'x"; DROP TABLE users; --' }],
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(adapter.alterTable).not.toHaveBeenCalled();
   });
 });
 

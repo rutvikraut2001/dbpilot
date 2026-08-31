@@ -47,6 +47,64 @@ export interface AdapterCapabilities {
    * them for selection without offering a Create button that could only fail.
    */
   supportsDatabaseCreate: boolean;
+  /**
+   * Whether a table's columns can be altered through the adapter.
+   *
+   * Off for engines where the operation has no honest synchronous meaning:
+   * MongoDB has no schema to alter, and ClickHouse's column changes are
+   * asynchronous mutations that rewrite parts in the background rather than
+   * completing when the statement returns.
+   */
+  supportsSchemaEdit: boolean;
+}
+
+/** A column to add, as the user described it. */
+export interface ColumnDefinition {
+  name: string;
+  /**
+   * The engine's own type name, passed through rather than mapped.
+   *
+   * A shared type vocabulary across PostgreSQL, MySQL and ClickHouse would have
+   * to either lose precision (`varchar(64)` vs `text` vs `String`) or invent a
+   * lowest common denominator nobody wants. The UI offers each engine's real
+   * types; the adapter validates against what that engine accepts.
+   */
+  type: string;
+  nullable?: boolean;
+  /** Raw SQL for the default. Null means no default. */
+  defaultValue?: string | null;
+}
+
+/**
+ * One change to a table's structure.
+ *
+ * A discriminated union rather than a free-form statement: it is what lets the
+ * API decide which changes are destructive, and lets each adapter render the
+ * same intent in its own dialect.
+ */
+export type SchemaChange =
+  | { kind: 'addColumn'; column: ColumnDefinition }
+  | { kind: 'dropColumn'; name: string }
+  | { kind: 'renameColumn'; from: string; to: string }
+  | { kind: 'setType'; name: string; type: string; using?: string }
+  | { kind: 'setNullable'; name: string; nullable: boolean }
+  | { kind: 'setDefault'; name: string; defaultValue: string | null };
+
+/** The SQL an adapter would run for a set of changes, without running it. */
+export interface SchemaChangePlan {
+  /** Statements in execution order, for the user to review before applying. */
+  statements: string[];
+  /**
+   * Whether the engine applies these atomically.
+   *
+   * PostgreSQL has transactional DDL, so a failed change rolls the whole edit
+   * back. MySQL commits implicitly at each statement, so a batch that fails
+   * halfway leaves the earlier changes applied — which the UI must say plainly
+   * rather than implying an all-or-nothing edit.
+   */
+  atomic: boolean;
+  /** Human-readable warnings: rewrites, locks, data loss. */
+  warnings: string[];
 }
 
 /**
@@ -309,6 +367,26 @@ export interface DatabaseAdapter {
 
   /** Create a database. Only defined when `capabilities.supportsDatabaseCreate`. */
   createDatabase?(name: string, options?: CreateDatabaseOptions): Promise<void>;
+
+  /**
+   * Render a set of structural changes as statements, without running them.
+   *
+   * Separate from applying so the user can read exactly what will run. For a
+   * change that rewrites a table or discards a column, seeing the statement is
+   * the difference between confirming a described intent and confirming a
+   * black box.
+   */
+  planSchemaChanges?(
+    table: string,
+    changes: SchemaChange[]
+  ): Promise<SchemaChangePlan>;
+
+  /**
+   * Apply structural changes to a table.
+   *
+   * Only defined when `capabilities.supportsSchemaEdit`.
+   */
+  alterTable?(table: string, changes: SchemaChange[]): Promise<void>;
 
   // Schema operations
   getTables(): Promise<TableInfo[]>;

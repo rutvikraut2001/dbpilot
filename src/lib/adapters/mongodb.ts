@@ -43,6 +43,10 @@ export class MongoDBAdapter extends BaseAdapter {
     supportsTransactions: false,
     supportsIndexManagement: true,
     supportsDatabaseCreate: true,
+    // MongoDB has no schema to alter: fields exist per document, so there is
+    // no column to add or drop. Changing every document is a data edit, not a
+    // structural one, and belongs in the query editor where it is visible.
+    supportsSchemaEdit: false,
   };
 
   private client: MongoClient | null = null;

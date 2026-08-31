@@ -245,6 +245,7 @@ docker compose down && docker compose up -d
 | **Query Tab** | Write and execute SQL (PostgreSQL/MySQL/ClickHouse), MongoDB queries (JSON), or Redis commands. |
 | **Schema Tab** | Available for PostgreSQL, MySQL, MongoDB, and ClickHouse. Shows interactive ER diagram with export. |
 | **Database Picker** | The sidebar shows which database on the server you are reading from. Connect without naming one and pick it here, switch between databases without reconnecting, or create a new one. Databases the engine owns are hidden behind "Show system". |
+| **Structure Tab** | Add, rename, retype and drop columns. Changes are staged, then shown as the exact SQL that will run — with the engine's own caveats (a type change rewrites the table; MySQL cannot roll a multi-step edit back). Destructive edits need `APPLY` typed. PostgreSQL and MySQL only. |
 | **Indexes Tab** | Per-table index list with size, usage count and definition. Create an index (ordered columns, unique, method, partial predicate, non-blocking build) or drop one behind a typed confirmation. Flags duplicate, redundant, unused and oversized indexes. |
 | **Redis Cache** | Browse keys grouped by pattern (`user:*`), see type, TTL, memory. Flush individual DB or entire Redis instance. |
 | **Multi-DB Switcher** | Click the connection badge in the header to switch between saved databases instantly. |
@@ -278,11 +279,11 @@ docker compose down && docker compose up -d
 - [x] Dark/light/system theme with aurora design
 - [x] Index management (list, create, drop, health findings)
 - [x] Database picker (connect without a database, switch, create)
+- [x] Table structure editing (columns, types, constraints, with SQL preview)
 - [x] Saved queries
 - [x] Query history persistence
 - [x] Query cancellation (aborts the statement on the server)
 - [ ] SQLite support
-- [ ] Table structure editing
 
 ---
 

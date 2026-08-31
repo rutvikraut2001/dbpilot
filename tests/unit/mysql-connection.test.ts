@@ -28,7 +28,7 @@ describe("MySQL connection strings", () => {
     );
   });
 
-w  // Port 1 has nothing listening, so these fail at the socket immediately. What
+  // Port 1 has nothing listening, so these fail at the socket immediately. What
   // is being asserted is which *kind* of failure happens: a parse error means
   // the string was rejected before any connection was attempted, so anything
   // else proves the string parsed.

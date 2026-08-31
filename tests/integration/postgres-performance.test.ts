@@ -152,6 +152,78 @@ describe.skipIf(!CONNECTION_STRING)("PostgreSQL paging and bulk delete", () => {
     });
   });
 
+  describe("getTables under concurrent DDL", () => {
+    it("keeps listing while tables are dropped underneath it", async () => {
+      // The regression: the listing used to rebuild each table's name and cast
+      // it back with `::regclass`, evaluated per row. A table dropped between
+      // the row being read and the cast running threw, failing the *entire*
+      // listing — measured at 8 failures in 60 attempts under this churn, which
+      // on a busy database means the sidebar intermittently going blank.
+      // Joining pg_class on oid has no such window.
+      const TABLES = 30;
+      for (let i = 0; i < TABLES; i++) {
+        await adapter.executeQuery(
+          `CREATE TABLE IF NOT EXISTS churn_${i} (id int, x text)`
+        );
+      }
+
+      let listings = 0;
+      let failures = 0;
+
+      try {
+        const churn = (async () => {
+          for (let round = 0; round < TABLES; round++) {
+            await adapter.executeQuery(`DROP TABLE IF EXISTS churn_${round}`);
+            await adapter.executeQuery(
+              `CREATE TABLE IF NOT EXISTS churn_${round} (id int, x text)`
+            );
+          }
+        })();
+
+        const listing = (async () => {
+          for (let round = 0; round < TABLES; round++) {
+            try {
+              await adapter.getTables();
+              listings++;
+            } catch {
+              failures++;
+            }
+          }
+        })();
+
+        await Promise.all([churn, listing]);
+      } finally {
+        for (let i = 0; i < TABLES; i++) {
+          await adapter.executeQuery(`DROP TABLE IF EXISTS churn_${i}`);
+        }
+      }
+
+      expect(failures).toBe(0);
+      expect(listings).toBe(TABLES);
+    }, 120000);
+
+    it("includes materialized views, which information_schema omits", async () => {
+      // A side effect of reading pg_class directly: matviews were previously
+      // invisible in the sidebar entirely.
+      await adapter.executeQuery("DROP MATERIALIZED VIEW IF EXISTS perf_matview");
+      await adapter.executeQuery(
+        "CREATE MATERIALIZED VIEW perf_matview AS SELECT 1 AS n"
+      );
+
+      try {
+        const tables = await adapter.getTables();
+        const matview = tables.find((t) => t.name === "perf_matview");
+
+        expect(matview).toBeDefined();
+        expect(matview?.type).toBe("view");
+      } finally {
+        await adapter.executeQuery(
+          "DROP MATERIALIZED VIEW IF EXISTS perf_matview"
+        );
+      }
+    });
+  });
+
   describe("deleteRows", () => {
     async function remaining(): Promise<number> {
       const result = await adapter.executeQuery(

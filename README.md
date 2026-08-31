@@ -278,9 +278,10 @@ docker compose down && docker compose up -d
 - [x] Dark/light/system theme with aurora design
 - [x] Index management (list, create, drop, health findings)
 - [x] Database picker (connect without a database, switch, create)
+- [x] Saved queries
+- [x] Query history persistence
+- [x] Query cancellation (aborts the statement on the server)
 - [ ] SQLite support
-- [ ] Saved queries
-- [ ] Query history persistence
 - [ ] Table structure editing
 
 ---

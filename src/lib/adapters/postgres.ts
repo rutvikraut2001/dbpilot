@@ -19,6 +19,9 @@ import {
 import { splitSqlStatements } from "../query-guard";
 import { quoteDoubleQuoted, withDatabase } from "../database-name";
 
+/** Ceiling on a single query, applied to every pooled connection. */
+const STATEMENT_TIMEOUT_MS = 30000;
+
 export class PostgresAdapter extends BaseAdapter {
   readonly dialect: QueryDialect = "sql";
 
@@ -66,9 +69,9 @@ export class PostgresAdapter extends BaseAdapter {
         keepAliveInitialDelayMillis: 10000,
       });
 
-      // Set statement timeout for all queries (30 seconds max)
+      // Cap runaway queries. Deliberate DDL lifts this — see runUnboundedDdl.
       this.pool.on("connect", (client) => {
-        client.query("SET statement_timeout = '30000'");
+        client.query(`SET statement_timeout = '${STATEMENT_TIMEOUT_MS}'`);
       });
 
       // Test the connection, and record where it actually landed.
@@ -245,23 +248,37 @@ export class PostgresAdapter extends BaseAdapter {
    * accepts.
    */
   async createDatabase(name: string): Promise<void> {
-    const pool = this.getPool();
-    await pool.query(`CREATE DATABASE ${quoteDoubleQuoted(name)}`);
+    // Copying a large template database can also outrun the query ceiling.
+    await this.runUnboundedDdl(`CREATE DATABASE ${quoteDoubleQuoted(name)}`);
   }
 
   async getTables(): Promise<TableInfo[]> {
     const pool = this.getPool();
 
+    // Read straight from pg_class by oid rather than going through
+    // information_schema and casting a rebuilt name back with `::regclass`.
+    //
+    // That cast is evaluated per row and throws if the relation disappeared
+    // since the row was read, so one concurrent DROP anywhere in the database
+    // failed the entire listing and emptied the sidebar. Joining on the oid has
+    // no such window: a table dropped mid-scan is simply absent from the result.
+    //
+    // It also picks up materialized views, which information_schema.tables omits
+    // entirely — they were invisible here before.
     const query = `
       SELECT
-        t.table_schema as schema,
-        t.table_name as name,
-        t.table_type as type,
-        pg_total_relation_size(quote_ident(t.table_schema) || '.' || quote_ident(t.table_name)) as size_bytes,
-        (SELECT reltuples::bigint FROM pg_class WHERE oid = (quote_ident(t.table_schema) || '.' || quote_ident(t.table_name))::regclass) as row_count
-      FROM information_schema.tables t
-      WHERE t.table_schema NOT IN ('pg_catalog', 'information_schema')
-      ORDER BY t.table_schema, t.table_name
+        n.nspname AS schema,
+        c.relname AS name,
+        c.relkind AS kind,
+        pg_total_relation_size(c.oid) AS size_bytes,
+        c.reltuples::bigint AS row_count
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+        AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+        AND NOT n.nspname LIKE 'pg_toast%'
+        AND NOT n.nspname LIKE 'pg_temp%'
+      ORDER BY n.nspname, c.relname
     `;
 
     const result = await pool.query(query);
@@ -269,7 +286,8 @@ export class PostgresAdapter extends BaseAdapter {
     return result.rows.map((row) => ({
       name: row.name,
       schema: row.schema,
-      type: row.type === "VIEW" ? "view" : "table",
+      // 'v' is a view, 'm' a materialized view; the rest are table-shaped.
+      type: row.kind === "v" || row.kind === "m" ? "view" : "table",
       rowCount: parseInt(row.row_count) || 0,
       sizeBytes: parseInt(row.size_bytes) || 0,
     }));
@@ -960,11 +978,43 @@ export class PostgresAdapter extends BaseAdapter {
     "brin",
   ] as const;
 
+  /**
+   * Run a statement with the session query ceiling lifted.
+   *
+   * `connect()` puts `statement_timeout = 30s` on every pooled connection to
+   * stop a runaway query, and that ceiling applies to DDL as well — which meant
+   * building an index on a large table failed at thirty seconds with
+   * "canceling statement due to statement timeout". A btree over three million
+   * rows takes about eight seconds here, so the limit was reached on exactly the
+   * tables where an index is worth having.
+   *
+   * A deliberate, confirmed schema change is not the accident that ceiling
+   * exists to catch, so it is lifted for these statements only. The timeout is
+   * restored before the connection returns to the pool, or every later query on
+   * it would run unbounded.
+   */
+  private async runUnboundedDdl(statement: string): Promise<void> {
+    const client = await this.getPool().connect();
+
+    try {
+      await client.query("SET statement_timeout = 0");
+      await client.query(statement);
+    } finally {
+      await client
+        .query(`SET statement_timeout = '${STATEMENT_TIMEOUT_MS}'`)
+        .catch(() => {
+          /* the connection is being discarded anyway */
+        });
+      client.release();
+    }
+  }
+
   async createIndex(
     table: string,
     options: CreateIndexOptions
   ): Promise<IndexInfo> {
-    const pool = this.getPool();
+    // runUnboundedDdl acquires the client, and getPool() inside it is what
+    // guards against running this while disconnected.
     const quotedTable = this.quoteIdentifier(table);
 
     this.validateColumnName(options.name);
@@ -1011,9 +1061,8 @@ export class PostgresAdapter extends BaseAdapter {
       );
     }
 
-    // CREATE INDEX CONCURRENTLY cannot run inside a transaction block, so this
-    // deliberately goes through the pool rather than a managed client.
-    await pool.query(statement);
+    // No transaction wrapper: CREATE INDEX CONCURRENTLY cannot run inside one.
+    await this.runUnboundedDdl(statement);
 
     const created = (await this.getIndexInfo(table)).find(
       (index) => index.name === options.name

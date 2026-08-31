@@ -196,6 +196,18 @@ describe.skipIf(!CONNECTION_STRING)("PostgreSQL indexes", () => {
       expect(created.name).toBe("ix_concurrent");
     });
 
+    it("does not leave the query ceiling lifted on the pooled connection", async () => {
+      // Index DDL runs with `statement_timeout = 0`, because a build on a large
+      // table legitimately outruns the 30s ceiling — measured at 131s for an
+      // expensive index over 3M rows, where the old code failed at 30. The risk
+      // that creates is the opposite one: leaking `0` back into the pool would
+      // silently remove the ceiling from every later query in the process.
+      await adapter.createIndex!("ix_rows", { name: "ix_a", columns: ["a"] });
+
+      const shown = await adapter.executeQuery("SHOW statement_timeout");
+      expect(shown.rows[0].statement_timeout).toBe("30s");
+    });
+
     it("rejects an access method outside the allowlist", async () => {
       await expect(
         adapter.createIndex!("ix_rows", {
